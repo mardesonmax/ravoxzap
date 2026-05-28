@@ -7,6 +7,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   type WASocket,
 } from '@whiskeysockets/baileys';
+import { spawn } from 'node:child_process';
 import { readFile, mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import Pino from 'pino';
@@ -238,6 +239,59 @@ function normalizeMessageStatus(status: number | null | undefined): MessageStatu
   if (status === 4 || status === 5) return 'READ';
   if (status === 0) return 'FAILED';
   return null;
+}
+
+async function runFfmpegAudioTranscode(inputPath: string, codec: 'libopus' | 'opus'): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    const errors: Buffer[] = [];
+    const args = [
+      '-hide_banner',
+      '-loglevel',
+      'error',
+      '-i',
+      inputPath,
+      '-vn',
+      '-ac',
+      '1',
+      '-ar',
+      '48000',
+      '-c:a',
+      codec,
+      ...(codec === 'opus' ? ['-strict', '-2'] : []),
+      '-b:a',
+      '32k',
+      '-f',
+      'ogg',
+      'pipe:1',
+    ];
+    const ffmpeg = spawn('ffmpeg', args);
+
+    ffmpeg.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
+    ffmpeg.stderr.on('data', (chunk: Buffer) => errors.push(chunk));
+    ffmpeg.on('error', error => {
+      reject(new Error(`ffmpeg is required to send recorded audio: ${error.message}`));
+    });
+    ffmpeg.on('close', code => {
+      if (code === 0 && chunks.length > 0) {
+        resolve(Buffer.concat(chunks));
+        return;
+      }
+
+      const message = Buffer.concat(errors).toString('utf8').trim();
+      reject(new Error(message || `ffmpeg exited with code ${code ?? 'unknown'}`));
+    });
+  });
+}
+
+async function transcodeAudioToWhatsAppVoice(inputPath: string): Promise<Buffer> {
+  try {
+    return await runFfmpegAudioTranscode(inputPath, 'libopus');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.includes('Unknown encoder')) throw error;
+    return runFfmpegAudioTranscode(inputPath, 'opus');
+  }
 }
 
 export class WhatsAppConnectionManager {
@@ -487,17 +541,26 @@ export class WhatsAppConnectionManager {
     }
 
     const sendJid = recipient.jid ?? remoteJid;
-    const buffer = await readFile(input.path);
+    const media =
+      input.type === 'AUDIO'
+        ? {
+            buffer: await transcodeAudioToWhatsAppVoice(input.path),
+            mimeType: 'audio/ogg; codecs=opus',
+          }
+        : {
+            buffer: await readFile(input.path),
+            mimeType: input.mimeType,
+          };
     const result = await managed.socket.sendMessage(sendJid, {
       ...(input.type === 'IMAGE'
-        ? { image: buffer, caption: input.caption }
+        ? { image: media.buffer, caption: input.caption }
         : input.type === 'VIDEO'
-          ? { video: buffer, caption: input.caption, mimetype: input.mimeType }
+          ? { video: media.buffer, caption: input.caption, mimetype: media.mimeType }
           : input.type === 'AUDIO'
-            ? { audio: buffer, mimetype: input.mimeType, ptt: true }
+            ? { audio: media.buffer, mimetype: media.mimeType, ptt: true }
             : {
-                document: buffer,
-                mimetype: input.mimeType,
+                document: media.buffer,
+                mimetype: media.mimeType,
                 fileName: input.fileName,
                 caption: input.caption,
               }),

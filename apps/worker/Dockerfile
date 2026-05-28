@@ -13,5 +13,6 @@ COPY apps/worker apps/worker
 RUN yarn workspace @ravoxzap/worker build
 
 FROM base AS runner
+RUN apk add --no-cache ffmpeg
 COPY --from=build /app /app
 CMD ["yarn", "workspace", "@ravoxzap/worker", "start"]

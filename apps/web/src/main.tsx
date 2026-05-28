@@ -76,6 +76,16 @@ type DashboardRoute = {
   instanceTab: InstanceTab;
 };
 
+type ComposerDraft = {
+  body: string;
+  selectedFile: File | null;
+};
+
+const emptyComposerDraft: ComposerDraft = {
+  body: '',
+  selectedFile: null,
+};
+
 const viewPaths: Record<DashboardView, string> = {
   dashboard: '/dashboard',
   instances: '/dashboard/instances',
@@ -1310,8 +1320,7 @@ function ChatsView({
   const [contactDdi, setContactDdi] = useState('55');
   const [contactPhone, setContactPhone] = useState('');
   const [contactSearch, setContactSearch] = useState('');
-  const [body, setBody] = useState('');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [composerDrafts, setComposerDrafts] = useState<Record<string, ComposerDraft>>({});
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [recordingLevel, setRecordingLevel] = useState(0);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
@@ -1327,12 +1336,10 @@ function ChatsView({
   const recordingAudioContextRef = useRef<AudioContext | null>(null);
   const recordingAnimationRef = useRef<number | null>(null);
   const recordingTimerRef = useRef<number | null>(null);
+  const recordingDraftKeyRef = useRef<string | null>(null);
+  const discardRecordingRef = useRef(false);
+  const pendingSendDraftKeyRef = useRef<string | null>(null);
   const queryClient = useQueryClient();
-  const selectedFileKind = selectedFile ? mediaKindFromMime(selectedFile.type) : null;
-  const selectedFilePreviewUrl = useMemo(
-    () => selectedFile && selectedFileKind !== 'DOCUMENT' ? URL.createObjectURL(selectedFile) : null,
-    [selectedFile, selectedFileKind],
-  );
   const connectedInstances = useMemo(
     () => instances.filter(instance => instance.status === 'CONNECTED'),
     [instances],
@@ -1341,6 +1348,41 @@ function ChatsView({
     selectedInstance?.status === 'CONNECTED'
       ? selectedInstance
       : connectedInstances[0];
+  const activeDraftKey =
+    chatInstance && (selectedContact?.remoteJid ?? selectedChat?.remoteJid)
+      ? `${chatInstance.id}:${selectedContact?.remoteJid ?? selectedChat?.remoteJid}`
+      : null;
+  const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey] ?? emptyComposerDraft) : emptyComposerDraft;
+  const body = activeDraft.body;
+  const selectedFile = activeDraft.selectedFile;
+  const selectedFileKind = selectedFile ? mediaKindFromMime(selectedFile.type) : null;
+  const selectedFilePreviewUrl = useMemo(
+    () => selectedFile && selectedFileKind !== 'DOCUMENT' ? URL.createObjectURL(selectedFile) : null,
+    [selectedFile, selectedFileKind],
+  );
+
+  const updateDraft = (key: string | null, patch: Partial<ComposerDraft>) => {
+    if (!key) return;
+
+    setComposerDrafts(current => ({
+      ...current,
+      [key]: {
+        ...(current[key] ?? emptyComposerDraft),
+        ...patch,
+      },
+    }));
+  };
+
+  const setBody = (value: string) => updateDraft(activeDraftKey, { body: value });
+  const setSelectedFile = (file: File | null) => updateDraft(activeDraftKey, { selectedFile: file });
+  const clearDraft = (key: string | null) => {
+    if (!key) return;
+    setComposerDrafts(current => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  };
 
   useEffect(() => {
     setSelectedChat(null);
@@ -1361,6 +1403,11 @@ function ChatsView({
       mediaRecorderRef.current = null;
       setIsRecordingAudio(false);
     }
+  };
+
+  const cancelRecordingAudio = () => {
+    discardRecordingRef.current = true;
+    stopRecordingAudio();
   };
 
   const stopRecordingMeter = () => {
@@ -1416,6 +1463,11 @@ function ChatsView({
   const startRecordingAudio = async () => {
     setRecordingError('');
 
+    if (!activeDraftKey) {
+      setRecordingError('Selecione uma conversa antes de gravar áudio.');
+      return;
+    }
+
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
       setRecordingError('Gravação de áudio não é suportada neste navegador.');
       return;
@@ -1430,6 +1482,8 @@ function ChatsView({
       ].find(type => MediaRecorder.isTypeSupported(type)) ?? 'audio/webm';
       const recorder = new MediaRecorder(stream, { mimeType });
       audioChunksRef.current = [];
+      recordingDraftKeyRef.current = activeDraftKey;
+      discardRecordingRef.current = false;
       recordingStreamRef.current = stream;
       mediaRecorderRef.current = recorder;
       startRecordingMeter(stream);
@@ -1443,9 +1497,16 @@ function ChatsView({
       };
       recorder.onstop = () => {
         const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        const extension = blob.type.includes('ogg') ? 'ogg' : 'webm';
-        const file = new File([blob], `audio-${Date.now()}.${extension}`, { type: blob.type || 'audio/webm' });
-        setSelectedFile(file);
+        const draftKey = recordingDraftKeyRef.current;
+
+        if (!discardRecordingRef.current && blob.size > 0 && draftKey) {
+          const extension = blob.type.includes('ogg') ? 'ogg' : 'webm';
+          const file = new File([blob], `audio-${Date.now()}.${extension}`, { type: blob.type || 'audio/webm' });
+          updateDraft(draftKey, { selectedFile: file });
+        }
+
+        discardRecordingRef.current = false;
+        recordingDraftKeyRef.current = null;
         setIsRecordingAudio(false);
         stopRecordingMeter();
         stopRecordingTimer();
@@ -1454,7 +1515,7 @@ function ChatsView({
         mediaRecorderRef.current = null;
       };
 
-      setSelectedFile(null);
+      updateDraft(activeDraftKey, { selectedFile: null });
       recorder.start();
       setIsRecordingAudio(true);
     } catch {
@@ -1464,6 +1525,8 @@ function ChatsView({
       recordingStreamRef.current?.getTracks().forEach(track => track.stop());
       recordingStreamRef.current = null;
       mediaRecorderRef.current = null;
+      recordingDraftKeyRef.current = null;
+      discardRecordingRef.current = false;
       setIsRecordingAudio(false);
     }
   };
@@ -1558,6 +1621,8 @@ function ChatsView({
       const recipient = selectedContact?.phoneE164 ?? selectedChat?.remoteJid;
       if (!recipient) throw new Error('Selecione uma conversa para enviar');
 
+      pendingSendDraftKeyRef.current = activeDraftKey;
+
       return selectedFile
         ? apiClient.sendFile({
             instanceId: chatInstance!.id,
@@ -1568,8 +1633,8 @@ function ChatsView({
         : apiClient.sendText(chatInstance!.id, recipient, body.trim());
     },
     onSuccess: async message => {
-      setBody('');
-      setSelectedFile(null);
+      clearDraft(pendingSendDraftKeyRef.current);
+      pendingSendDraftKeyRef.current = null;
       if (fileInputRef.current) fileInputRef.current.value = '';
       await queryClient.invalidateQueries({ queryKey: ['chats', chatInstance?.id] });
       const refreshedChats = await queryClient.fetchQuery({
@@ -1595,6 +1660,9 @@ function ChatsView({
         });
         void queryClient.invalidateQueries({ queryKey: ['messages', chatInstance?.id, refreshedChat.id] });
       }
+    },
+    onError: () => {
+      pendingSendDraftKeyRef.current = null;
     },
   });
 
@@ -1859,10 +1927,7 @@ function ChatsView({
                               />
                             )}
                             {message.mediaUrl && message.type === 'AUDIO' && (
-                              <div className="rounded-xl border border-[#2d3036] bg-[#111318] p-3">
-                                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">Áudio</p>
-                                <audio controls src={absoluteApiUrl(message.mediaUrl)} className="w-72 max-w-full" />
-                              </div>
+                              <audio controls src={absoluteApiUrl(message.mediaUrl)} className="h-10 w-72 max-w-full" />
                             )}
                             {message.mediaUrl && !['IMAGE', 'VIDEO', 'AUDIO'].includes(message.type ?? '') && (
                               <a
@@ -1989,34 +2054,38 @@ function ChatsView({
               </div>
             )}
             {isRecordingAudio && (
-              <div className="mb-2 rounded-full border border-[#25563a] bg-[#0d2417] px-3 py-2 text-sm text-gray-100">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-red-500/15 text-red-300">
-                    <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-red-400" />
-                  </span>
+              <div className="mb-2 rounded-full border border-[#25563a] bg-[#0d2417] px-2 py-2 text-sm text-gray-100 sm:px-3">
+                <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+                  <button
+                    type="button"
+                    className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full text-red-300 transition hover:bg-red-500/15 hover:text-red-100"
+                    onClick={cancelRecordingAudio}
+                    aria-label="Cancelar áudio"
+                  >
+                    <Trash2 size={18} />
+                  </button>
                   <span className="min-w-11 text-sm font-semibold tabular-nums text-red-100">
                     {formatDuration(recordingSeconds)}
                   </span>
-                  <div className="flex h-9 flex-1 items-center gap-1 overflow-hidden rounded-full bg-[#111318] px-3">
-                    {Array.from({ length: 28 }).map((_, index) => {
-                      const centerDistance = Math.abs(index - 13.5) / 13.5;
-                      const barStrength = Math.max(0.08, recordingLevel * (1.05 - centerDistance * 0.45));
+                  <div className="flex h-10 min-w-0 flex-1 items-center gap-0.5 overflow-hidden rounded-full bg-[#111318] px-3">
+                    {Array.from({ length: 72 }).map((_, index) => {
+                      const wave = Math.sin(index * 0.72) * 0.5 + 0.5;
+                      const liveLevel = Math.max(0.1, recordingLevel);
+                      const barStrength = 0.18 + liveLevel * (0.35 + wave * 0.65);
 
                       return (
                         <span
                           key={index}
-                          className="w-1 rounded-full bg-[#2edb5c] transition-[height,opacity] duration-75"
+                          className="w-0.5 flex-1 rounded-full bg-[#2edb5c] transition-[height,opacity] duration-75"
                           style={{
-                            height: `${5 + barStrength * 24}px`,
-                            opacity: 0.35 + barStrength * 0.65,
+                            maxWidth: 4,
+                            height: `${4 + barStrength * 26}px`,
+                            opacity: 0.45 + Math.min(1, barStrength) * 0.55,
                           }}
                         />
                       );
                     })}
                   </div>
-                  <span className="hidden min-w-fit text-xs text-gray-400 sm:block">
-                    toque no quadrado para parar
-                  </span>
                 </div>
               </div>
             )}

@@ -17,43 +17,5 @@ services:
     ports:
       - "26379:6379"
 
-  api:
-    build:
-      context: .
-      dockerfile: apps/api/Dockerfile
-    container_name: ravoxzap-api
-    env_file:
-      - .env
-    ports:
-      - "3334:3334"
-    depends_on:
-      - postgres
-      - redis
-
-  web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-    container_name: ravoxzap-web
-    env_file:
-      - .env
-    ports:
-      - "3004:3004"
-    depends_on:
-      - api
-
-  worker:
-    build:
-      context: .
-      dockerfile: apps/worker/Dockerfile
-    container_name: ravoxzap-worker
-    env_file:
-      - .env
-    volumes:
-      - ./storage/sessions:/app/storage/sessions
-    depends_on:
-      - postgres
-      - redis
-
 volumes:
   postgres_data:
