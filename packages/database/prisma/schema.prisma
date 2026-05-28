@@ -1,0 +1,268 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrganizationRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+enum InstanceStatus {
+  CREATED
+  WAITING_QR
+  CONNECTING
+  CONNECTED
+  DISCONNECTED
+  RECONNECTING
+  ERROR
+  BANNED
+  LOGGED_OUT
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  AUDIO
+  DOCUMENT
+  VIDEO
+  UNKNOWN
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  RECEIVED
+}
+
+enum ApiKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum WebhookEvent {
+  INSTANCE_CONNECTED
+  INSTANCE_DISCONNECTED
+  MESSAGE_RECEIVED
+  MESSAGE_SENT
+  MESSAGE_DELIVERED
+  MESSAGE_READ
+  MESSAGE_FAILED
+  CHAT_PRESENCE
+  QR_UPDATED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum JobLogStatus {
+  STARTED
+  SUCCESS
+  FAILED
+}
+
+model User {
+  id           String   @id @default(cuid())
+  name         String?
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships OrganizationMember[]
+  apiKeys     ApiKey[]
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  members   OrganizationMember[]
+  instances WhatsAppInstance[]
+  contacts  Contact[]
+  apiKeys   ApiKey[]
+  webhooks  WebhookEndpoint[]
+}
+
+model OrganizationMember {
+  id             String           @id @default(cuid())
+  userId         String
+  organizationId String
+  role           OrganizationRole @default(MEMBER)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model WhatsAppInstance {
+  id              String         @id @default(cuid())
+  organizationId  String
+  name            String
+  status          InstanceStatus @default(CREATED)
+  phoneNumber     String?
+  profileName     String?
+  qrCode          String?
+  qrUpdatedAt     DateTime?
+  lastConnectedAt DateTime?
+  disconnectedAt  DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  chats        Chat[]
+  messages     Message[]
+  webhooks     WebhookEndpoint[]
+
+  @@index([organizationId])
+  @@index([status])
+}
+
+model Chat {
+  id         String   @id @default(cuid())
+  instanceId String
+  remoteJid  String
+  name       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  instance WhatsAppInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@unique([instanceId, remoteJid])
+  @@index([instanceId])
+}
+
+model Message {
+  id             String        @id @default(cuid())
+  instanceId     String
+  chatId         String?
+  remoteJid      String
+  fromMe         Boolean
+  type           MessageType
+  body           String?
+  mediaUrl       String?
+  status         MessageStatus @default(QUEUED)
+  externalId     String?
+  failureReason  String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  instance WhatsAppInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  chat     Chat?            @relation(fields: [chatId], references: [id], onDelete: SetNull)
+
+  @@index([instanceId, createdAt])
+  @@index([chatId, createdAt])
+  @@index([externalId])
+}
+
+model Contact {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  ddi            String
+  ddd            String
+  number         String
+  phoneE164      String
+  remoteJid      String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, phoneE164])
+  @@index([organizationId, name])
+}
+
+model ApiKey {
+  id             String       @id @default(cuid())
+  userId         String
+  organizationId String
+  name           String
+  keyHash        String       @unique
+  prefix         String
+  lastFour       String
+  status         ApiKeyStatus @default(ACTIVE)
+  lastUsedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  revokedAt      DateTime?
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([userId])
+}
+
+model WebhookEndpoint {
+  id             String         @id @default(cuid())
+  organizationId String
+  instanceId     String?
+  url            String
+  secret         String
+  active         Boolean        @default(true)
+  events         WebhookEvent[]
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  instance     WhatsAppInstance? @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  deliveries   WebhookDelivery[]
+
+  @@index([organizationId])
+  @@index([instanceId])
+}
+
+model WebhookDelivery {
+  id             String                @id @default(cuid())
+  webhookId      String
+  organizationId String
+  event          WebhookEvent
+  payload        Json
+  status         WebhookDeliveryStatus @default(PENDING)
+  attempts       Int                   @default(0)
+  responseStatus Int?
+  error          String?
+  deliveredAt    DateTime?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  webhook WebhookEndpoint @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+
+  @@index([webhookId, status])
+  @@index([organizationId, createdAt])
+}
+
+model JobLog {
+  id             String       @id @default(cuid())
+  name           String
+  queueName      String
+  organizationId String?
+  instanceId     String?
+  status         JobLogStatus @default(STARTED)
+  payload        Json?
+  error          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([queueName, status])
+  @@index([instanceId])
+}

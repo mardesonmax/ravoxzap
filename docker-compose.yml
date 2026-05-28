@@ -1,0 +1,59 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: ravoxzap-postgres
+    ports:
+      - "25432:5432"
+    environment:
+      POSTGRES_USER: ravoxzap
+      POSTGRES_PASSWORD: ravoxzap
+      POSTGRES_DB: ravoxzap
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    container_name: ravoxzap-redis
+    ports:
+      - "26379:6379"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: ravoxzap-api
+    env_file:
+      - .env
+    ports:
+      - "3334:3334"
+    depends_on:
+      - postgres
+      - redis
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: ravoxzap-web
+    env_file:
+      - .env
+    ports:
+      - "3004:3004"
+    depends_on:
+      - api
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    container_name: ravoxzap-worker
+    env_file:
+      - .env
+    volumes:
+      - ./storage/sessions:/app/storage/sessions
+    depends_on:
+      - postgres
+      - redis
+
+volumes:
+  postgres_data:

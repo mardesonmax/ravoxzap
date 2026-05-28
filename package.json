@@ -1,0 +1,37 @@
+{
+  "name": "ravoxzap",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "yarn@1.22.22",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev --filter=@ravoxzap/api --filter=@ravoxzap/worker --filter=@ravoxzap/web --parallel",
+    "dev:web": "yarn workspace @ravoxzap/web dev",
+    "dev:api": "yarn workspace @ravoxzap/api dev",
+    "dev:worker": "yarn workspace @ravoxzap/worker dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "check": "turbo run check",
+    "test": "turbo run test",
+    "db:generate": "yarn workspace @ravoxzap/database db:generate",
+    "db:migrate": "yarn workspace @ravoxzap/database db:migrate",
+    "db:seed": "yarn workspace @ravoxzap/database db:seed",
+    "db:studio": "yarn workspace @ravoxzap/database db:studio",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "dotenv": "^17.4.2",
+    "eslint": "^9.36.0",
+    "eslint-plugin-import-helpers": "^2.0.1",
+    "globals": "^15.14.0",
+    "prettier": "^3.4.2",
+    "turbo": "^2.5.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.44.0"
+  }
+}
