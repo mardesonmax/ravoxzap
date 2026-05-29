@@ -142,6 +142,8 @@ model WhatsAppInstance {
   webhooks     WebhookEndpoint[]
   groups       WhatsAppGroup[]
   operations   WhatsAppOperation[]
+  baileysAuthSession BaileysAuthSession?
+  baileysAuthKeys    BaileysAuthKey[]
 
   @@index([organizationId])
   @@index([status])
@@ -183,6 +185,7 @@ model Message {
   type           MessageType
   body           String?
   mediaUrl       String?
+  mediaExpiresAt DateTime?
   status         MessageStatus @default(QUEUED)
   externalId     String?
   failureReason  String?
@@ -195,6 +198,31 @@ model Message {
   @@index([instanceId, createdAt])
   @@index([chatId, createdAt])
   @@index([externalId])
+}
+
+model BaileysAuthSession {
+  id         String   @id @default(cuid())
+  instanceId String   @unique
+  creds      String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  instance WhatsAppInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+}
+
+model BaileysAuthKey {
+  id         String   @id @default(cuid())
+  instanceId String
+  type       String
+  keyId      String
+  value      String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  instance WhatsAppInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+
+  @@unique([instanceId, type, keyId])
+  @@index([instanceId, type])
 }
 
 model WhatsAppGroup {

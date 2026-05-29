@@ -12,6 +12,19 @@ const envSchema = z.object({
   ENCRYPTION_KEY: z.string().min(16),
   WORKER_SECRET: z.string().min(16),
   SESSION_STORAGE_PATH: z.string().default('./storage/sessions'),
+  BAILEYS_AUTH_STORE: z.enum(['file', 'database']).default('file'),
+  CORS_ORIGINS: z.string().optional(),
+  DISK: z.enum(['local', 'r2']).default('local'),
+  MEDIA_STORAGE_MODE: z.enum(['archive', 'metadata_only']).default('archive'),
+  MEDIA_RETENTION_DAYS: z.coerce.number().int().min(1).default(7),
+  STORAGE_BASE_URL: z.string().url().optional(),
+  R2_ENDPOINT: z.string().url().optional(),
+  R2_REGION: z.string().default('us-east-1'),
+  R2_BUCKET: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  WORKER_REPLICAS: z.coerce.number().int().min(1).default(1),
+  WORKER_LOCK_TTL_MS: z.coerce.number().int().min(5000).default(30000),
 });
 
 export type Env = z.infer<typeof envSchema>;

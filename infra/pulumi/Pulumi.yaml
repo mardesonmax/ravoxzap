@@ -1,0 +1,3 @@
+name: ravoxzap-gcp
+runtime: nodejs
+description: RavoxZap production baseline in the TorneioX Pulumi style

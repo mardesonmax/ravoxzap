@@ -1,7 +1,8 @@
 import { Queue, Worker } from 'bullmq';
 import { createHmac, randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { rm } from 'node:fs/promises';
 import path from 'node:path';
+import { Redis } from 'ioredis';
 
 import { env } from '@ravoxzap/config';
 import { prisma, type WebhookEvent as PrismaWebhookEvent } from '@ravoxzap/database';
@@ -14,21 +15,41 @@ import {
   type SendMessageJob,
   type WhatsAppOperationJob,
 } from '@ravoxzap/queue';
+import { createMediaStorage } from '@ravoxzap/storage';
 import {
   WhatsAppConnectionManager,
+  getSessionPath,
   extractGroupInviteCode,
   type WhatsAppGroupCreateResult,
   type WhatsAppGroupMetadata,
 } from '@ravoxzap/whatsapp';
+import { clearPrismaBaileysAuthState, usePrismaBaileysAuthState } from './baileys-auth.js';
+import { InstanceLockManager } from './instance-locks.js';
 
 const logger = createLogger({ service: 'worker' });
 const connection = createQueueConnection(env.REDIS_URL);
+const redis = new Redis(env.REDIS_URL, { maxRetriesPerRequest: null });
+const instanceLocks = new InstanceLockManager(redis, env.WORKER_LOCK_TTL_MS);
 const whatsapp = new WhatsAppConnectionManager();
 const repoRoot = path.resolve(process.cwd(), '../..');
 const sessionStoragePath = path.isAbsolute(env.SESSION_STORAGE_PATH)
   ? env.SESSION_STORAGE_PATH
   : path.resolve(repoRoot, env.SESSION_STORAGE_PATH);
 const mediaStoragePath = path.resolve(repoRoot, 'storage/media');
+const mediaStorage = createMediaStorage({
+  disk: env.DISK,
+  mode: env.MEDIA_STORAGE_MODE,
+  retentionDays: env.MEDIA_RETENTION_DAYS,
+  localRoot: mediaStoragePath,
+  storageBaseUrl: env.STORAGE_BASE_URL,
+  r2: {
+    endpoint: env.R2_ENDPOINT,
+    region: env.R2_REGION,
+    bucket: env.R2_BUCKET,
+    accessKeyId: env.R2_ACCESS_KEY_ID,
+    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+  },
+});
 
 logger.info('Session storage configured', { sessionStoragePath });
 
@@ -203,12 +224,13 @@ async function saveIncomingMedia(input: {
 }) {
   if (!input.media) return undefined;
 
-  await mkdir(path.join(mediaStoragePath, input.instanceId), { recursive: true });
   const fileName = `${input.externalId ?? randomUUID()}.${input.media.extension}`;
-  const absolutePath = path.join(mediaStoragePath, input.instanceId, fileName);
-  await writeFile(absolutePath, input.media.bytes);
-
-  return `/media/${input.instanceId}/${fileName}`;
+  return mediaStorage.save({
+    instanceId: input.instanceId,
+    fileName,
+    bytes: input.media.bytes,
+    mimeType: input.media.mimeType,
+  });
 }
 
 const dispatchWebhookQueue = new Queue<DispatchWebhookJob>(queueNames.dispatchWebhook, {
@@ -216,6 +238,7 @@ const dispatchWebhookQueue = new Queue<DispatchWebhookJob>(queueNames.dispatchWe
 });
 
 async function ensureConnectedSocket(input: { instanceId: string; organizationId: string }) {
+  await instanceLocks.ensure(input.instanceId);
   if (whatsapp.isConnected(input.instanceId)) return;
 
   logger.warn('WhatsApp socket missing before operation; reconnecting from saved session', input);
@@ -225,9 +248,28 @@ async function ensureConnectedSocket(input: { instanceId: string; organizationId
     data: { status: 'RECONNECTING' },
   });
 
-  await whatsapp.connect({
+  await connectWhatsAppInstance(input);
+}
+
+async function getAuthState(instanceId: string, clearSession = false) {
+  if (env.BAILEYS_AUTH_STORE === 'database') {
+    if (clearSession) await clearPrismaBaileysAuthState(instanceId);
+    return usePrismaBaileysAuthState(instanceId, env.ENCRYPTION_KEY);
+  }
+
+  if (clearSession) {
+    await rm(getSessionPath(sessionStoragePath, instanceId), { recursive: true, force: true });
+  }
+
+  return undefined;
+}
+
+async function connectWhatsAppInstance(input: { instanceId: string; organizationId: string; clearSession?: boolean }) {
+  await instanceLocks.ensure(input.instanceId);
+  return whatsapp.connect({
     instanceId: input.instanceId,
     sessionBasePath: sessionStoragePath,
+    authState: await getAuthState(input.instanceId, input.clearSession),
     callbacks: createConnectionCallbacks(input.instanceId, input.organizationId),
   });
 }
@@ -1256,6 +1298,9 @@ function createConnectionCallbacks(instanceId: string, organizationId: string) {
         organizationId,
         ...reason,
       });
+      if (!reason.shouldReconnect) {
+        await instanceLocks.release(instanceId);
+      }
       await prisma.whatsAppInstance.update({
         where: { id: instanceId },
         data: {
@@ -1320,11 +1365,13 @@ function createConnectionCallbacks(instanceId: string, organizationId: string) {
           unreadCount: message.fromMe ? 0 : { increment: 1 },
         },
       });
-      const mediaUrl = message.mediaUrl ?? (await saveIncomingMedia({
+      const savedMedia = message.mediaUrl ? undefined : await saveIncomingMedia({
         instanceId,
         externalId: message.externalId,
         media: message.media,
-      }));
+      });
+      const mediaUrl = message.mediaUrl ?? savedMedia?.mediaUrl;
+      const mediaExpiresAt = savedMedia?.mediaExpiresAt;
       const mediaFailureReason =
         ['IMAGE', 'AUDIO', 'DOCUMENT', 'VIDEO', 'STICKER'].includes(message.type) && !mediaUrl
           ? message.mediaDownloadError ?? 'Media download did not return a file'
@@ -1359,6 +1406,7 @@ function createConnectionCallbacks(instanceId: string, organizationId: string) {
             participantJid: message.participantJid ?? existingMessage.participantJid,
             body: message.body ?? existingMessage.body,
             mediaUrl: mediaUrl ?? existingMessage.mediaUrl,
+            mediaExpiresAt: mediaExpiresAt ?? existingMessage.mediaExpiresAt,
             failureReason: mediaFailureReason ?? existingMessage.failureReason,
             status: message.fromMe ? 'SENT' : 'RECEIVED',
           },
@@ -1377,6 +1425,7 @@ function createConnectionCallbacks(instanceId: string, organizationId: string) {
           type: message.type,
           body: message.body,
           mediaUrl,
+          mediaExpiresAt,
           failureReason: mediaFailureReason,
           status: message.fromMe ? 'SENT' : 'RECEIVED',
         },
@@ -1450,19 +1499,16 @@ const workers = [
     const jobContext = { queueName: queueNames.connectInstance, name: job.name, organizationId, instanceId };
 
     await logJob({ ...jobContext, status: 'STARTED', payload: job.data });
-    if (clearSession) {
-      await whatsapp.clearSession({ instanceId, sessionBasePath: sessionStoragePath });
-    }
     await prisma.whatsAppInstance.update({
       where: { id: instanceId },
       data: { status: 'CONNECTING', qrCode: null, qrUpdatedAt: null },
     });
 
     try {
-      const result = await whatsapp.connect({
+      const result = await connectWhatsAppInstance({
         instanceId,
-        sessionBasePath: sessionStoragePath,
-        callbacks: createConnectionCallbacks(instanceId, organizationId),
+        organizationId,
+        clearSession,
       });
 
       if (result.qrCode) {
@@ -1499,9 +1545,15 @@ const workers = [
 
     await logJob({ ...jobContext, status: 'STARTED', payload: job.data });
     if (clearSession) {
-      await whatsapp.clearSession({ instanceId, sessionBasePath: sessionStoragePath });
+      if (env.BAILEYS_AUTH_STORE === 'database') {
+        await clearPrismaBaileysAuthState(instanceId);
+      } else {
+        await whatsapp.clearSession({ instanceId, sessionBasePath: sessionStoragePath });
+      }
+      await instanceLocks.release(instanceId);
     } else {
       await whatsapp.disconnect(instanceId);
+      await instanceLocks.release(instanceId);
     }
     await prisma.whatsAppInstance.updateMany({
       where: { id: instanceId },
@@ -1537,11 +1589,7 @@ const workers = [
           data: { status: 'RECONNECTING' },
         });
 
-        await whatsapp.connect({
-          instanceId,
-          sessionBasePath: sessionStoragePath,
-          callbacks: createConnectionCallbacks(instanceId, organizationId),
-        });
+        await connectWhatsAppInstance({ instanceId, organizationId });
       }
 
       const sent = media
@@ -1761,12 +1809,10 @@ async function restoreConnectedInstances() {
       organizationId: instance.organizationId,
       status: instance.status,
     });
-    await whatsapp
-      .connect({
-        instanceId: instance.id,
-        sessionBasePath: sessionStoragePath,
-        callbacks: createConnectionCallbacks(instance.id, instance.organizationId),
-      })
+    await connectWhatsAppInstance({
+      instanceId: instance.id,
+      organizationId: instance.organizationId,
+    })
       .catch(error => {
         logger.warn('Failed to restore WhatsApp socket', {
           instanceId: instance.id,
@@ -1783,6 +1829,8 @@ void restoreConnectedInstances();
 async function shutdown(signal: NodeJS.Signals) {
   logger.info('Shutting down worker', { signal });
   await Promise.all(workers.map(worker => worker.close()));
+  await instanceLocks.releaseAll();
+  await redis.quit();
   await dispatchWebhookQueue.close();
   await prisma.$disconnect();
   process.exit(0);

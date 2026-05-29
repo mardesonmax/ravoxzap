@@ -19,9 +19,13 @@ import { registerRoutes } from './routes/index.js';
 const logger = createLogger({ service: 'api' });
 const app = Fastify({ logger: false });
 const queues = createQueues(env.REDIS_URL);
+const corsOrigins = env.CORS_ORIGINS
+  ?.split(',')
+  .map(origin => origin.trim())
+  .filter(Boolean);
 
 app.register(cors, {
-  origin: true,
+  origin: corsOrigins?.length ? corsOrigins : true,
 });
 
 app.register(jwt, {
@@ -35,11 +39,13 @@ app.register(multipart, {
   },
 });
 
-app.register(fastifyStatic, {
-  root: path.resolve(process.cwd(), '../../storage/media'),
-  prefix: '/media/',
-  decorateReply: false,
-});
+if (env.DISK === 'local') {
+  app.register(fastifyStatic, {
+    root: path.resolve(process.cwd(), '../../storage/media'),
+    prefix: '/media/',
+    decorateReply: false,
+  });
+}
 
 app.register(fastifySwagger, {
   openapi: {

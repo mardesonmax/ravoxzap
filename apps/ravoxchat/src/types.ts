@@ -32,6 +32,7 @@ export type MessagePreview = {
   fromMe: boolean;
   status: string;
   mediaUrl?: string | null;
+  mediaExpiresAt?: string | null;
   createdAt: string;
 };
 
@@ -44,6 +45,7 @@ export type Message = {
   type?: string;
   body: string | null;
   mediaUrl?: string | null;
+  mediaExpiresAt?: string | null;
   failureReason?: string | null;
   status: string;
   createdAt: string;

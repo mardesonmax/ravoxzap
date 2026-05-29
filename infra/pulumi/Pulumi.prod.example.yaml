@@ -1,0 +1,62 @@
+# Example stack file for production baseline.
+# Copy to Pulumi.prod.yaml only for non-secret defaults.
+# Secrets should be set with setup-infra-config.sh or pulumi config set --secret.
+
+config:
+  ravoxzap-gcp:projectId: your-gcp-project-id
+  ravoxzap-gcp:region: southamerica-east1
+  ravoxzap-gcp:billingAccountId: billingAccounts/000000-000000-000000
+
+  ravoxzap-gcp:serviceName: ravoxzap-api
+  ravoxzap-gcp:workerName: ravoxzap-worker
+  ravoxzap-gcp:migrationJobName: ravoxzap-migrate
+  ravoxzap-gcp:artifactRepositoryId: ravoxzap
+  ravoxzap-gcp:apiImageName: api
+  ravoxzap-gcp:workerImageName: worker
+  ravoxzap-gcp:initialApiImageDigest: ''
+  ravoxzap-gcp:initialWorkerImageDigest: ''
+
+  ravoxzap-gcp:dbInstanceName: ravoxzap-pg
+  ravoxzap-gcp:dbName: ravoxzap
+  ravoxzap-gcp:dbUserName: ravoxzap_app
+  ravoxzap-gcp:dbTier: db-f1-micro
+  ravoxzap-gcp:dbDiskGb: '10'
+  ravoxzap-gcp:dbConnectionGuardrail: '40'
+  ravoxzap-gcp:databasePoolMax: '3'
+
+  ravoxzap-gcp:redisInstanceName: ravoxzap-redis
+  ravoxzap-gcp:redisMemoryGb: '1'
+
+  ravoxzap-gcp:cloudRunMinInstances: '1'
+  ravoxzap-gcp:cloudRunMaxInstances: '10'
+  ravoxzap-gcp:cloudRunConcurrency: '80'
+  ravoxzap-gcp:cloudRunCpu: '1'
+  ravoxzap-gcp:cloudRunMemory: 1Gi
+
+  ravoxzap-gcp:workerReplicas: '2'
+  ravoxzap-gcp:workerCpu: 500m
+  ravoxzap-gcp:workerMemory: 1Gi
+  ravoxzap-gcp:workerLockTtlMs: '30000'
+
+  ravoxzap-gcp:apiBaseUrl: https://api.seudominio.com
+  ravoxzap-gcp:webBaseUrl: https://dashboard.seudominio.com
+  ravoxzap-gcp:corsOrigins: https://dashboard.seudominio.com,https://chat.seudominio.com
+  ravoxzap-gcp:storageBaseUrl: https://pub-your-r2-domain.example.com
+  ravoxzap-gcp:r2Endpoint: https://your-account-id.r2.cloudflarestorage.com
+  ravoxzap-gcp:r2Region: us-east-1
+  ravoxzap-gcp:r2Bucket: ravoxzap-media
+  ravoxzap-gcp:mediaRetentionDays: '7'
+
+  ravoxzap-gcp:enableBudgetAlerts: 'true'
+  ravoxzap-gcp:monthlyBudgetUsd: '50'
+  ravoxzap-gcp:githubOwner: your-github-owner
+  ravoxzap-gcp:githubRepoName: ravoxzap
+  ravoxzap-gcp:githubBranchRegex: ^main$
+
+# Secret keys expected:
+# - ravoxzap-gcp:jwtSecret
+# - ravoxzap-gcp:apiKeySecret
+# - ravoxzap-gcp:encryptionKey
+# - ravoxzap-gcp:workerSecret
+# - ravoxzap-gcp:r2AccessKeyId
+# - ravoxzap-gcp:r2SecretAccessKey

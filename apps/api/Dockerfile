@@ -14,5 +14,5 @@ RUN yarn workspace @ravoxzap/api build
 
 FROM base AS runner
 COPY --from=build /app /app
-EXPOSE 3333
+EXPOSE 8080
 CMD ["yarn", "workspace", "@ravoxzap/api", "start"]

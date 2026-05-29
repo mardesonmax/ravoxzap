@@ -1,0 +1,121 @@
+substitutions:
+  _REGION: southamerica-east1
+  _REPOSITORY: ravoxzap
+  _API_IMAGE_NAME: api
+  _WORKER_IMAGE_NAME: worker
+  _SERVICE_NAME: ravoxzap-api
+  _MIGRATION_JOB_NAME: ravoxzap-migrate
+  _GKE_CLUSTER: ravoxzap-worker-cluster
+  _GKE_LOCATION: southamerica-east1
+  _K8S_NAMESPACE: ravoxzap
+  _WORKER_DEPLOYMENT: ravoxzap-worker
+
+steps:
+  - id: build-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - apps/api/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_API_IMAGE_NAME}:$SHORT_SHA
+      - .
+
+  - id: build-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - apps/worker/Dockerfile
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_WORKER_IMAGE_NAME}:$SHORT_SHA
+      - .
+
+  - id: push-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_API_IMAGE_NAME}:$SHORT_SHA
+
+  - id: push-worker
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_WORKER_IMAGE_NAME}:$SHORT_SHA
+
+  - id: update-migration-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - update
+      - ${_MIGRATION_JOB_NAME}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_API_IMAGE_NAME}:$SHORT_SHA
+      - --region=${_REGION}
+
+  - id: run-migrations
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - execute
+      - ${_MIGRATION_JOB_NAME}
+      - --region=${_REGION}
+      - --wait
+
+  - id: deploy-api
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - update
+      - ${_SERVICE_NAME}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_API_IMAGE_NAME}:$SHORT_SHA
+      - --region=${_REGION}
+
+  - id: get-gke-credentials
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    entrypoint: gcloud
+    args:
+      - container
+      - clusters
+      - get-credentials
+      - ${_GKE_CLUSTER}
+      - --region=${_GKE_LOCATION}
+
+  - id: deploy-worker
+    name: gcr.io/cloud-builders/kubectl
+    args:
+      - set
+      - image
+      - deployment/${_WORKER_DEPLOYMENT}
+      - worker=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_WORKER_IMAGE_NAME}:$SHORT_SHA
+      - -n
+      - ${_K8S_NAMESPACE}
+    env:
+      - CLOUDSDK_COMPUTE_REGION=${_GKE_LOCATION}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER}
+
+  - id: wait-worker-rollout
+    name: gcr.io/cloud-builders/kubectl
+    args:
+      - rollout
+      - status
+      - deployment/${_WORKER_DEPLOYMENT}
+      - -n
+      - ${_K8S_NAMESPACE}
+      - --timeout=300s
+    env:
+      - CLOUDSDK_COMPUTE_REGION=${_GKE_LOCATION}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_GKE_CLUSTER}
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_API_IMAGE_NAME}:$SHORT_SHA
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_WORKER_IMAGE_NAME}:$SHORT_SHA
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
