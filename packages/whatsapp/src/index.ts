@@ -18,6 +18,7 @@ import type { MessageStatus, MessageType } from '@ravoxzap/shared';
 
 export type NormalizedIncomingMessage = {
   remoteJid: string;
+  participantJid?: string;
   aliases?: string[];
   externalId?: string;
   fromMe: boolean;
@@ -363,6 +364,33 @@ async function resolveJidAliases(socket: WASocket, rawKey: Record<string, unknow
   };
 }
 
+async function resolveIncomingParticipantJid(socket: WASocket, rawKey: Record<string, unknown>, fallbackJid: string, chatJid: string) {
+  if (!chatJid.endsWith('@g.us')) return undefined;
+
+  const rawValues = [
+    rawKey.participant,
+    rawKey.participantAlt,
+    rawKey.participantUsername,
+    fallbackJid,
+  ];
+
+  for (const value of rawValues) {
+    if (typeof value !== 'string' || !value.includes('@')) continue;
+
+    const jid = normalizePnJid(value);
+    if (jid.endsWith('@g.us')) continue;
+
+    if (isLidJid(jid)) {
+      const phoneJid = await resolveLidToPhoneJid(socket, jid);
+      return phoneJid ? normalizePnJid(phoneJid) : jid;
+    }
+
+    return jid;
+  }
+
+  return undefined;
+}
+
 async function normalizeIncomingMessage(socket: WASocket, rawMessage: WASocket['ev'] extends never ? never : any): Promise<NormalizedIncomingMessage | null> {
   const message = getMessageContent(rawMessage.message);
   const remoteJid = rawMessage.key?.remoteJid;
@@ -397,6 +425,7 @@ async function normalizeIncomingMessage(socket: WASocket, rawMessage: WASocket['
 
   return {
     remoteJid: resolvedJids.remoteJid,
+    participantJid: await resolveIncomingParticipantJid(socket, rawMessage.key ?? {}, remoteJid, resolvedJids.remoteJid),
     aliases: resolvedJids.aliases,
     externalId: rawMessage.key?.id,
     fromMe: Boolean(rawMessage.key?.fromMe),
@@ -2039,9 +2068,9 @@ export class WhatsAppConnectionManager {
     return { read: true };
   }
 
-  async archiveChat(input: { instanceId: string; remoteJid: string; archived: boolean }) {
+  async archiveChat(input: { instanceId: string; remoteJid: string; archived: boolean; lastMessages: any[] }) {
     const socket = this.getConnectedSocket(input.instanceId) as any;
-    await socket.chatModify({ archive: input.archived }, normalizePhoneToJid(input.remoteJid));
+    await socket.chatModify({ archive: input.archived, lastMessages: input.lastMessages }, normalizePhoneToJid(input.remoteJid));
     return { archived: input.archived };
   }
 
@@ -2058,15 +2087,15 @@ export class WhatsAppConnectionManager {
     return { mutedUntil: input.mutedUntil ?? null };
   }
 
-  async clearChat(input: { instanceId: string; remoteJid: string }) {
+  async clearChat(input: { instanceId: string; remoteJid: string; lastMessages: any[] }) {
     const socket = this.getConnectedSocket(input.instanceId) as any;
-    await socket.chatModify({ clear: true }, normalizePhoneToJid(input.remoteJid));
+    await socket.chatModify({ clear: true, lastMessages: input.lastMessages }, normalizePhoneToJid(input.remoteJid));
     return { cleared: true };
   }
 
-  async deleteChat(input: { instanceId: string; remoteJid: string }) {
+  async deleteChat(input: { instanceId: string; remoteJid: string; lastMessages: any[] }) {
     const socket = this.getConnectedSocket(input.instanceId) as any;
-    await socket.chatModify({ delete: true }, normalizePhoneToJid(input.remoteJid));
+    await socket.chatModify({ delete: true, lastMessages: input.lastMessages }, normalizePhoneToJid(input.remoteJid));
     return { deleted: true };
   }
 

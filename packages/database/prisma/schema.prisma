@@ -177,6 +177,7 @@ model Message {
   instanceId     String
   chatId         String?
   remoteJid      String
+  participantJid String?
   fromMe         Boolean
   type           MessageType
   body           String?

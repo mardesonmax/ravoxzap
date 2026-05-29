@@ -454,6 +454,27 @@ async function findOperationChat(operationId: string, chatId?: string | null) {
   return chat;
 }
 
+async function getChatLastMessages(chat: { id: string; remoteJid: string }) {
+  const isGroup = chat.remoteJid.endsWith('@g.us');
+  const messages = await prisma.message.findMany({
+    where: { chatId: chat.id, externalId: { not: null } },
+    orderBy: { createdAt: 'desc' },
+    take: 50,
+  });
+
+  return messages
+    .filter(message => message.externalId && (!isGroup || message.fromMe || message.participantJid))
+    .map(message => ({
+      key: {
+        remoteJid: chat.remoteJid,
+        id: message.externalId ?? '',
+        fromMe: message.fromMe,
+        ...(isGroup && !message.fromMe && message.participantJid ? { participant: message.participantJid } : {}),
+      },
+      messageTimestamp: Math.max(1, Math.floor(message.createdAt.getTime() / 1000)),
+    }));
+}
+
 async function resolveOperationGroup(input: Record<string, unknown>, groupId?: string | null) {
   if (typeof input.groupRemoteJid === 'string' && input.groupRemoteJid.endsWith('@g.us')) {
     return input.groupRemoteJid;
@@ -1114,7 +1135,7 @@ async function runWhatsAppOperation(job: WhatsAppOperationJob) {
     case 'CHAT_ARCHIVE': {
       const chat = await findOperationChat(operation.id, operation.chatId);
       const archived = booleanValue(input, 'archived', true);
-      await whatsapp.archiveChat({ instanceId: job.instanceId, remoteJid: chat.remoteJid, archived });
+      await whatsapp.archiveChat({ instanceId: job.instanceId, remoteJid: chat.remoteJid, archived, lastMessages: await getChatLastMessages(chat) });
       await prisma.chat.update({
         where: { id: chat.id },
         data: { archivedAt: archived ? new Date() : null },
@@ -1143,13 +1164,13 @@ async function runWhatsAppOperation(job: WhatsAppOperationJob) {
     }
     case 'CHAT_CLEAR': {
       const chat = await findOperationChat(operation.id, operation.chatId);
-      await whatsapp.clearChat({ instanceId: job.instanceId, remoteJid: chat.remoteJid });
+      await whatsapp.clearChat({ instanceId: job.instanceId, remoteJid: chat.remoteJid, lastMessages: await getChatLastMessages(chat) });
       await prisma.message.deleteMany({ where: { chatId: chat.id } });
       return { cleared: true };
     }
     case 'CHAT_DELETE': {
       const chat = await findOperationChat(operation.id, operation.chatId);
-      await whatsapp.deleteChat({ instanceId: job.instanceId, remoteJid: chat.remoteJid });
+      await whatsapp.deleteChat({ instanceId: job.instanceId, remoteJid: chat.remoteJid, lastMessages: await getChatLastMessages(chat) });
       await prisma.chat.update({
         where: { id: chat.id },
         data: { deletedAt: new Date() },
@@ -1263,6 +1284,7 @@ function createConnectionCallbacks(instanceId: string, organizationId: string) {
       };
       mediaUrl?: string;
       mediaDownloadError?: string;
+      participantJid?: string;
     }) => {
       const isGroupMessage = message.remoteJid.endsWith('@g.us');
       const remoteAliases = getRemoteJidAliases(uniqueValues([message.remoteJid, ...(message.aliases ?? [])]));
@@ -1334,6 +1356,7 @@ function createConnectionCallbacks(instanceId: string, organizationId: string) {
           data: {
             chatId: existingMessage.chatId ?? chat.id,
             remoteJid: existingMessage.remoteJid,
+            participantJid: message.participantJid ?? existingMessage.participantJid,
             body: message.body ?? existingMessage.body,
             mediaUrl: mediaUrl ?? existingMessage.mediaUrl,
             failureReason: mediaFailureReason ?? existingMessage.failureReason,
@@ -1348,6 +1371,7 @@ function createConnectionCallbacks(instanceId: string, organizationId: string) {
           instanceId,
           chatId: chat.id,
           remoteJid: chatRemoteJid,
+          participantJid: message.participantJid,
           externalId: message.externalId,
           fromMe: message.fromMe,
           type: message.type,
