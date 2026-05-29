@@ -5106,19 +5106,6 @@ ${headers}`;
 }`,
     }),
     autoDoc({
-      id: 'send-poll-vote',
-      group: 'Mensagens avançadas',
-      method: 'POST',
-      title: 'Votar em enquete',
-      path: `/v1/instances/${exampleInstanceId}/send-poll-vote`,
-      description: 'Endpoint reservado para voto em enquete.',
-      requestBody: `{
-  "pollMessageId": "MESSAGE_ID",
-  "optionName": "Manhã"
-}`,
-      notes: ['Hoje esta operação retorna FAILED: voto de enquete ainda não é suportado com segurança pelo adapter atual.', 'Mantida na referência para deixar o contrato explícito e evitar endpoint fantasma.'],
-    }),
-    autoDoc({
       id: 'send-ptv',
       group: 'Mensagens avançadas',
       method: 'POST',
@@ -5295,15 +5282,6 @@ ${headers}`;
       title: 'Desbloquear contato',
       path: `/v1/instances/${exampleInstanceId}/contacts/${examplePhone}/unblock`,
       description: 'Remove o bloqueio de um contato.',
-    }),
-    autoDoc({
-      id: 'contacts-report',
-      group: 'Contatos',
-      method: 'POST',
-      title: 'Denunciar contato',
-      path: `/v1/instances/${exampleInstanceId}/contacts/${examplePhone}/report`,
-      description: 'Endpoint reservado para denúncia de contato.',
-      notes: ['Hoje esta operação retorna FAILED: denúncia não é suportada com segurança pelo adapter atual.', 'Não use em produção até o adapter expor um método confiável.'],
     }),
     autoDoc({
       id: 'privacy-get',
@@ -5560,18 +5538,6 @@ ${headers}`;
       path: `/v1/instances/${exampleInstanceId}/newsletters`,
       description: 'Lista canais disponíveis para a instância conforme suporte do adapter.',
     }),
-    autoDoc({
-      id: 'newsletters-search',
-      group: 'Newsletters',
-      method: 'POST',
-      title: 'Buscar canais',
-      path: `/v1/instances/${exampleInstanceId}/newsletters/search`,
-      description: 'Endpoint reservado para busca pública de canais.',
-      requestBody: `{
-  "query": "ravox"
-}`,
-      notes: ['Hoje esta operação retorna FAILED: busca pública de canais não é suportada com segurança pelo adapter atual.'],
-    }),
     ...[
       ['newsletters-metadata', 'GET', 'Metadata do canal', '', undefined],
       ['newsletters-follow', 'POST', 'Seguir canal', '/follow', undefined],
@@ -5582,7 +5548,6 @@ ${headers}`;
       ['newsletters-name', 'POST', 'Atualizar nome do canal', '/name', '{\n  "name": "Novo nome"\n}'],
       ['newsletters-description', 'POST', 'Atualizar descrição do canal', '/description', '{\n  "description": "Nova descrição"\n}'],
       ['newsletters-picture', 'POST', 'Atualizar foto do canal', '/picture', '{\n  "image": "https://site.com/canal.jpg"\n}'],
-      ['newsletters-admin-invite-accept', 'POST', 'Aceitar convite admin', '/admin-invite/accept', '{\n  "message": {}\n}'],
       ['newsletters-admin-invite-revoke', 'POST', 'Revogar convite admin', '/admin-invite/revoke', `{\n  "invitedJid": "+${examplePhone}"\n}`],
       ['newsletters-admin-remove', 'POST', 'Remover admin do canal', '/admins/remove', `{\n  "userJid": "+${examplePhone}"\n}`],
       ['newsletters-transfer', 'POST', 'Transferir propriedade', '/transfer-ownership', `{\n  "userJid": "+${examplePhone}"\n}`],
@@ -5596,9 +5561,6 @@ ${headers}`;
       path: `/v1/instances/${exampleInstanceId}/newsletters/${exampleNewsletterId}${suffix ?? ''}`,
       description: `${title}.`,
       requestBody: body,
-      notes: id === 'newsletters-admin-invite-accept'
-        ? ['Hoje esta operação retorna FAILED sem o payload completo de mensagem de convite.', 'Use apenas quando o adapter expuser uma chave de convite confiável.']
-        : undefined,
     })),
     autoDoc({
       id: 'business-profile',

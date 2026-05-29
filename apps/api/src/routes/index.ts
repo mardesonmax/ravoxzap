@@ -2106,8 +2106,8 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
   });
 
   app.post('/v1/instances/:instanceId/send-poll-vote', async request => {
-    const body = parseBody(request, z.record(z.string(), z.unknown()));
-    return enqueuePublicOperation(request, 'MESSAGE_SEND_POLL_VOTE', body);
+    await getPublicInstance(request);
+    throw new AppError('Voto de enquete ainda não é suportado com segurança pelo adapter atual.', 501, 'NOT_SUPPORTED');
   });
 
   app.post('/v1/instances/:instanceId/send-ptv', async request => {
@@ -2216,8 +2216,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
 
   app.post('/v1/instances/:instanceId/contacts/:phone/report', async request => {
     await getPublicInstance(request);
-    const { phone } = parseParams(request, phoneParamsSchema);
-    return enqueuePublicOperation(request, 'CONTACT_REPORT', { phone: decodeURIComponent(phone) });
+    throw new AppError('Denunciar contato não é suportado com segurança pelo adapter atual.', 501, 'NOT_SUPPORTED');
   });
 
   app.get('/v1/instances/:instanceId/privacy', async request => enqueuePublicOperation(request, 'PRIVACY_GET', {}));
@@ -2579,8 +2578,8 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
   });
 
   app.post('/v1/instances/:instanceId/newsletters/search', async request => {
-    const body = parseBody(request, z.record(z.string(), z.unknown()));
-    return enqueuePublicOperation(request, 'NEWSLETTER_SEARCH', body);
+    await getPublicInstance(request);
+    throw new AppError('Busca pública de canais não é suportada com segurança pelo adapter atual.', 501, 'NOT_SUPPORTED');
   });
 
   app.get('/v1/instances/:instanceId/newsletters/:newsletterId', async request => {
@@ -2642,9 +2641,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
 
   app.post('/v1/instances/:instanceId/newsletters/:newsletterId/admin-invite/accept', async request => {
     await getPublicInstance(request);
-    const { newsletterId } = parseParams(request, newsletterParamsSchema);
-    const body = parseBody(request, z.record(z.string(), z.unknown()));
-    return enqueuePublicOperation(request, 'NEWSLETTER_ACCEPT_ADMIN_INVITE', { ...body, newsletterId: decodeURIComponent(newsletterId) });
+    throw new AppError('Aceitar convite de admin de canal exige payload confiável de mensagem de convite e ainda não está exposto com segurança.', 501, 'NOT_SUPPORTED');
   });
 
   app.post('/v1/instances/:instanceId/newsletters/:newsletterId/admin-invite/revoke', async request => {
