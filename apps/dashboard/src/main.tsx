@@ -3905,13 +3905,14 @@ function DashboardHome({ summary }: { summary?: DashboardSummary }) {
     AUDIO: 'Áudios',
     DOCUMENT: 'Documentos',
     VIDEO: 'Vídeos',
+    STICKER: 'Figurinhas',
     UNKNOWN: 'Outros',
   };
   const timeline = summary?.timeline.map(item => ({
     ...item,
     label: new Intl.DateTimeFormat('pt-BR', { day: '2-digit', month: '2-digit' }).format(new Date(`${item.date}T00:00:00`)),
   })) ?? [];
-  const maxTypeCount = Math.max(1, ...Object.values(summary?.byType ?? { TEXT: 0, IMAGE: 0, AUDIO: 0, DOCUMENT: 0, VIDEO: 0, UNKNOWN: 0 }));
+  const maxTypeCount = Math.max(1, ...Object.values(summary?.byType ?? { TEXT: 0, IMAGE: 0, AUDIO: 0, DOCUMENT: 0, VIDEO: 0, STICKER: 0, UNKNOWN: 0 }));
 
   return (
     <div className="space-y-5">

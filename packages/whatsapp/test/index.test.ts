@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { chooseIncomingChatRemoteJid, extractGroupInviteCode } from '../src/index.js';
+import { chooseIncomingChatRemoteJid, collectGroupJidsFromMessageContent, extractGroupInviteCode } from '../src/index.js';
 
 describe('extractGroupInviteCode', () => {
   it('keeps a raw invite code', () => {
@@ -42,5 +42,37 @@ describe('chooseIncomingChatRemoteJid', () => {
         '123456789@lid',
       ),
     ).toBe('5585988532761@s.whatsapp.net');
+  });
+});
+
+describe('collectGroupJidsFromMessageContent', () => {
+  it('extracts a group JID from sender key distribution messages', () => {
+    expect(
+      collectGroupJidsFromMessageContent({
+        senderKeyDistributionMessage: {
+          groupId: '120363424804348891@g.us',
+        },
+        imageMessage: {
+          caption: 'foto no grupo',
+        },
+      }),
+    ).toEqual(['120363424804348891@g.us']);
+  });
+
+  it('extracts a group JID from nested ephemeral messages', () => {
+    expect(
+      collectGroupJidsFromMessageContent({
+        ephemeralMessage: {
+          message: {
+            fastRatchetKeySenderKeyDistributionMessage: {
+              groupId: '120363424804348891@g.us',
+            },
+            stickerMessage: {
+              mimetype: 'image/webp',
+            },
+          },
+        },
+      }),
+    ).toEqual(['120363424804348891@g.us']);
   });
 });

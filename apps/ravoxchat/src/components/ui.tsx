@@ -286,13 +286,16 @@ export function AudioPlayer({ src, fromMe = false, className = '', onLoaded }: {
   );
 }
 
-export function MessageBubble({ message, config, onMediaLoad }: { message: Message; config: RavoxChatConfig; onMediaLoad?: () => void }) {
+export function MessageBubble({ message, config, onMediaLoad, senderName }: { message: Message; config: RavoxChatConfig; onMediaLoad?: () => void; senderName?: string }) {
   const type = message.type ?? 'TEXT';
   const mediaUrl = message.mediaUrl ? (message.mediaUrl.startsWith('http') ? message.mediaUrl : `${cleanBaseUrl(config.apiBaseUrl)}${message.mediaUrl}`) : null;
+  const isSticker = type === 'STICKER';
   return (
     <div className={`flex ${message.fromMe ? 'justify-end' : 'justify-start'}`}>
-      <div className={`max-w-[78%] rounded-2xl px-3 py-2 text-sm shadow ${message.fromMe ? 'bg-[#0f3d22]' : 'bg-[#20252b]'} ${type === 'AUDIO' ? 'ravox-audio-bubble' : ''}`}>
+      <div className={`max-w-[78%] rounded-2xl px-3 py-2 text-sm shadow ${message.fromMe ? 'bg-[#0f3d22]' : 'bg-[#20252b]'} ${type === 'AUDIO' ? 'ravox-audio-bubble' : ''} ${isSticker ? '!bg-transparent px-0 py-0 shadow-none' : ''}`}>
+        {senderName && <div className={`mb-1 text-xs font-semibold ${isSticker ? 'text-[#ff7a7a]' : 'text-[#ff7a7a]'}`}>{senderName}</div>}
         {type === 'IMAGE' && mediaUrl && <img src={mediaUrl} alt="" className="max-h-96 rounded-xl object-contain" onLoad={onMediaLoad} />}
+        {type === 'STICKER' && mediaUrl && <img src={mediaUrl} alt={message.body ?? 'Figurinha'} className="max-h-56 max-w-56 object-contain drop-shadow-lg" onLoad={onMediaLoad} />}
         {type === 'VIDEO' && mediaUrl && <video src={mediaUrl} className="max-h-96 rounded-xl" controls onLoadedMetadata={onMediaLoad} />}
         {type === 'AUDIO' && mediaUrl && <AudioPlayer src={mediaUrl} fromMe={message.fromMe} className="w-full" onLoaded={onMediaLoad} />}
         {type === 'DOCUMENT' && mediaUrl && <a href={mediaUrl} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded-xl bg-black/20 p-3 text-gray-100"><FileIcon size={18} />Abrir documento</a>}

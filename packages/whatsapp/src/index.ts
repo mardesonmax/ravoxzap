@@ -142,7 +142,7 @@ type ManagedSocket = {
   callbacks?: WhatsAppConnectionCallbacks;
 };
 
-type IncomingMediaType = Extract<MessageType, 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO'>;
+type IncomingMediaType = Extract<MessageType, 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'STICKER'>;
 
 const socketLogger = Pino({ level: 'silent' });
 
@@ -302,6 +302,32 @@ function getMessageContent(message: Record<string, any> | undefined): Record<str
   return content;
 }
 
+export function collectGroupJidsFromMessageContent(message: Record<string, any> | undefined): string[] {
+  const groupJids = new Set<string>();
+  const visit = (content: unknown, depth = 0) => {
+    if (!content || typeof content !== 'object' || depth > 8) return;
+    if (Array.isArray(content) || ArrayBuffer.isView(content)) return;
+    const record = content as Record<string, any>;
+    const groupIds = [
+      record.senderKeyDistributionMessage?.groupId,
+      record.fastRatchetKeySenderKeyDistributionMessage?.groupId,
+    ];
+
+    for (const value of groupIds) {
+      if (typeof value === 'string' && value.trim()) {
+        groupJids.add(normalizeGroupJid(value));
+      }
+    }
+
+    for (const value of Object.values(record)) {
+      if (value && typeof value === 'object') visit(value, depth + 1);
+    }
+  };
+
+  visit(message);
+  return [...groupJids];
+}
+
 function extensionFromMimeType(mimeType: string, fileName?: string): string {
   const fileExtension = fileName ? path.extname(fileName).replace('.', '').toLowerCase() : '';
   if (fileExtension) return fileExtension;
@@ -329,7 +355,7 @@ function extensionFromMimeType(mimeType: string, fileName?: string): string {
   return extensionByMime[normalizedMime] ?? 'bin';
 }
 
-async function resolveJidAliases(socket: WASocket, rawKey: Record<string, unknown>, fallbackJid: string) {
+async function resolveJidAliases(socket: WASocket, rawKey: Record<string, unknown>, fallbackJid: string, extraCandidates: string[] = []) {
   const candidates = new Set<string>();
   const rawValues = [
     rawKey.remoteJid,
@@ -338,11 +364,12 @@ async function resolveJidAliases(socket: WASocket, rawKey: Record<string, unknow
     rawKey.participant,
     rawKey.participantAlt,
     rawKey.participantUsername,
+    ...extraCandidates,
   ];
 
   for (const value of rawValues) {
     if (typeof value === 'string' && value.includes('@')) {
-      candidates.add(normalizePnJid(value));
+      candidates.add(value.endsWith('@g.us') ? normalizeGroupJid(value) : normalizePnJid(value));
     }
   }
 
@@ -412,8 +439,14 @@ async function normalizeIncomingMessage(socket: WASocket, rawMessage: WASocket['
   else if (message.audioMessage) type = 'AUDIO';
   else if (message.documentMessage) type = 'DOCUMENT';
   else if (message.videoMessage || message.ptvMessage) type = 'VIDEO';
+  else if (message.stickerMessage) type = 'STICKER';
 
-  const resolvedJids = await resolveJidAliases(socket, rawMessage.key ?? {}, remoteJid);
+  const resolvedJids = await resolveJidAliases(
+    socket,
+    rawMessage.key ?? {},
+    remoteJid,
+    collectGroupJidsFromMessageContent(rawMessage.message),
+  );
   let media: NormalizedIncomingMessage['media'];
   let mediaDownloadError: string | undefined;
 
@@ -449,7 +482,8 @@ async function downloadIncomingMedia(
     message?.audioMessage ??
     message?.videoMessage ??
     message?.ptvMessage ??
-    message?.documentMessage;
+    message?.documentMessage ??
+    message?.stickerMessage;
 
   if (!mediaMessage) return undefined;
 
@@ -458,6 +492,7 @@ async function downloadIncomingMedia(
     AUDIO: 'audio/ogg',
     DOCUMENT: 'application/octet-stream',
     VIDEO: 'video/mp4',
+    STICKER: 'image/webp',
   };
   const mimeType = mediaMessage.mimetype ?? fallbackMimeByType[type];
   const extension = extensionFromMimeType(mimeType, mediaMessage.fileName);
@@ -505,13 +540,14 @@ async function downloadIncomingMedia(
 }
 
 function isIncomingMediaType(type: MessageType): type is IncomingMediaType {
-  return type === 'IMAGE' || type === 'AUDIO' || type === 'DOCUMENT' || type === 'VIDEO';
+  return type === 'IMAGE' || type === 'AUDIO' || type === 'DOCUMENT' || type === 'VIDEO' || type === 'STICKER';
 }
 
 function baileysMediaType(type: IncomingMediaType) {
   if (type === 'IMAGE') return 'image';
   if (type === 'AUDIO') return 'audio';
   if (type === 'VIDEO') return 'video';
+  if (type === 'STICKER') return 'sticker';
   return 'document';
 }
 

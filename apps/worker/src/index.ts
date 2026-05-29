@@ -1275,7 +1275,7 @@ function createConnectionCallbacks(instanceId: string, organizationId: string) {
       aliases?: string[];
       externalId?: string;
       fromMe: boolean;
-      type: 'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'UNKNOWN';
+      type: 'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'STICKER' | 'UNKNOWN';
       body?: string;
       media?: {
         bytes: Buffer;
@@ -1326,11 +1326,11 @@ function createConnectionCallbacks(instanceId: string, organizationId: string) {
         media: message.media,
       }));
       const mediaFailureReason =
-        ['IMAGE', 'AUDIO', 'DOCUMENT', 'VIDEO'].includes(message.type) && !mediaUrl
+        ['IMAGE', 'AUDIO', 'DOCUMENT', 'VIDEO', 'STICKER'].includes(message.type) && !mediaUrl
           ? message.mediaDownloadError ?? 'Media download did not return a file'
           : null;
 
-      if (['IMAGE', 'AUDIO', 'DOCUMENT', 'VIDEO'].includes(message.type) && !mediaUrl) {
+      if (['IMAGE', 'AUDIO', 'DOCUMENT', 'VIDEO', 'STICKER'].includes(message.type) && !mediaUrl) {
         logger.warn('Incoming media did not produce a media file', {
           instanceId,
           organizationId,

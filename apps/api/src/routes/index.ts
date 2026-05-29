@@ -936,6 +936,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
       AUDIO: 0,
       DOCUMENT: 0,
       VIDEO: 0,
+      STICKER: 0,
       UNKNOWN: 0,
     };
 

@@ -151,7 +151,7 @@ export type DashboardSummary = {
     sent: number;
     received: number;
   };
-  byType: Record<'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'UNKNOWN', number>;
+  byType: Record<'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'STICKER' | 'UNKNOWN', number>;
   timeline: Array<{
     date: string;
     sent: number;

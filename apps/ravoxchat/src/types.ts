@@ -39,6 +39,7 @@ export type Message = {
   id: string;
   chatId: string | null;
   remoteJid: string;
+  participantJid?: string | null;
   fromMe: boolean;
   type?: string;
   body: string | null;

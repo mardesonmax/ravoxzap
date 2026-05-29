@@ -97,6 +97,7 @@ export function previewFromMessage(message?: MessagePreview) {
   if (type === 'AUDIO') return `${prefix}Audio`;
   if (type === 'VIDEO') return `${prefix}Video`;
   if (type === 'DOCUMENT') return `${prefix}Documento`;
+  if (type === 'STICKER') return `${prefix}Figurinha`;
   return `${prefix}${message.body ?? 'Mensagem'}`;
 }
 

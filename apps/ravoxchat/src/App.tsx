@@ -51,7 +51,7 @@ import {
   saveContacts,
   saveOperationHistory,
 } from './lib/storage';
-import { jidToPhone, mergeRows, normalizeConnection } from './lib/utils';
+import { jidToDisplayId, jidToPhone, mergeRows, normalizeConnection, phonesMayBeSame } from './lib/utils';
 import type { InboxRow, LocalContact, OperationRecord, RavoxChatConnection } from './types';
 
 type ConnectionFormState = {
@@ -492,6 +492,7 @@ function Workspace({
           onChatAction={runChatAction}
           onOpenGroupDetails={() => setGroupDetailsOpen(true)}
           onSaveLocalContact={saveLocalContact}
+          contacts={contacts}
         />
       </section>
 
@@ -520,6 +521,7 @@ function ChatPane({
   onChatAction,
   onOpenGroupDetails,
   onSaveLocalContact,
+  contacts,
 }: {
   config: RavoxChatConnection;
   selected: InboxRow | null;
@@ -536,6 +538,7 @@ function ChatPane({
   onChatAction: (action: string, body?: Record<string, unknown>) => Promise<void>;
   onOpenGroupDetails: () => void;
   onSaveLocalContact: (contact: LocalContact) => void;
+  contacts: LocalContact[];
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [saveContactOpen, setSaveContactOpen] = useState(false);
@@ -573,6 +576,21 @@ function ChatPane({
     if (!contactPhone) return;
     onSaveLocalContact({ name, phone: contactPhone, remoteJid: contactRemoteJid });
     setSaveContactOpen(false);
+  }
+
+  function senderNameFor(message: import('./types').Message) {
+    if (selected!.kind !== 'group' || message.fromMe || !message.participantJid) return undefined;
+    const phone = jidToPhone(message.participantJid);
+    const savedContact = phone
+      ? contacts.find(contact => phonesMayBeSame(contact.phone, phone))
+      : contacts.find(contact => contact.remoteJid === message.participantJid);
+    const participant = selected!.group?.participants?.find(item => {
+      if (item.jid === message.participantJid) return true;
+      const participantPhone = jidToPhone(item.jid);
+      return Boolean(phone && participantPhone && phonesMayBeSame(participantPhone, phone));
+    });
+
+    return savedContact?.name || participant?.name || phone || jidToDisplayId(message.participantJid);
   }
 
   return (
@@ -623,7 +641,7 @@ function ChatPane({
           <EmptyState title="Nenhuma mensagem carregada" />
         ) : (
           <div className="space-y-3">
-            {messages.map(message => <MessageBubble key={message.id} message={message} config={config} onMediaLoad={onMediaLoad} />)}
+            {messages.map(message => <MessageBubble key={message.id} message={message} config={config} onMediaLoad={onMediaLoad} senderName={senderNameFor(message)} />)}
           </div>
         )}
       </div>
