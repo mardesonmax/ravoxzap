@@ -3,7 +3,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "outputs": ["dist/**", "apps/web/dist/**"],
+      "outputs": ["dist/**", "apps/dashboard/dist/**", "apps/ravoxchat/dist/**"],
       "env": [
         "DATABASE_URL",
         "REDIS_URL",

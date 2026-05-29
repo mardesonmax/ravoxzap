@@ -58,6 +58,13 @@ export type Chat = {
   instanceId: string;
   remoteJid: string;
   name: string | null;
+  archivedAt?: string | null;
+  pinnedAt?: string | null;
+  mutedUntil?: string | null;
+  isRead?: boolean;
+  unreadCount?: number;
+  ephemeralExpiration?: number | null;
+  deletedAt?: string | null;
   updatedAt?: string;
   messages?: Array<{
     id: string;
@@ -67,6 +74,45 @@ export type Chat = {
     status: string;
     createdAt: string;
   }>;
+};
+
+export type WhatsAppOperation = {
+  operationId: string;
+  instanceId: string;
+  type: string;
+  status: 'QUEUED' | 'RUNNING' | 'SUCCESS' | 'FAILED';
+  input: unknown;
+  result: unknown;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WhatsAppGroupParticipant = {
+  id: string;
+  jid: string;
+  name: string | null;
+  isAdmin: boolean;
+  isSuperAdmin: boolean;
+};
+
+export type WhatsAppGroup = {
+  id: string;
+  instanceId: string;
+  remoteJid: string;
+  subject: string;
+  description: string | null;
+  ownerJid: string | null;
+  size: number | null;
+  announce: boolean | null;
+  restrict: boolean | null;
+  memberAddMode?: boolean | null;
+  joinApprovalMode?: boolean | null;
+  ephemeralDuration?: number | null;
+  pictureUrl?: string | null;
+  inviteCode: string | null;
+  lastSyncedAt: string | null;
+  participants?: WhatsAppGroupParticipant[];
 };
 
 export type Contact = {
@@ -88,6 +134,7 @@ export type Message = {
   type?: string;
   body: string | null;
   mediaUrl?: string | null;
+  failureReason?: string | null;
   status: string;
   createdAt: string;
 };
@@ -104,7 +151,7 @@ export type DashboardSummary = {
     sent: number;
     received: number;
   };
-  byType: Record<'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'UNKNOWN', number>;
+  byType: Record<'TEXT' | 'IMAGE' | 'AUDIO' | 'DOCUMENT' | 'VIDEO' | 'STICKER' | 'UNKNOWN', number>;
   timeline: Array<{
     date: string;
     sent: number;
@@ -200,7 +247,54 @@ export const apiClient = {
       `/instances/${id}/qrcode`,
     ),
   chats: (id: string) => api<Chat[]>(`/instances/${id}/chats`),
+  chat: (id: string, chatId: string) => api<Chat>(`/instances/${id}/chats/${chatId}`),
   messages: (id: string, chatId: string) => api<Message[]>(`/instances/${id}/chats/${chatId}/messages`),
+  chatOperation: (
+    id: string,
+    chatId: string,
+    action: 'read' | 'archive' | 'pin' | 'mute' | 'clear' | 'delete' | 'ephemeral',
+    body?: Record<string, unknown>,
+  ) =>
+    api<{ operationId: string; status: string }>(`/instances/${id}/chats/${chatId}/${action}`, {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
+  groups: (id: string) => api<WhatsAppGroup[]>(`/instances/${id}/groups`),
+  group: (id: string, groupId: string) => api<WhatsAppGroup>(`/instances/${id}/groups/${encodeURIComponent(groupId)}`),
+  syncGroups: (id: string) => api<{ operationId: string; status: string }>(`/instances/${id}/groups/sync`, { method: 'POST' }),
+  createGroup: (id: string, input: { name: string; participants: string[]; autoInvite?: boolean }) =>
+    api<{ operationId: string; status: string }>(`/instances/${id}/groups`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  groupOperation: (
+    id: string,
+    groupId: string,
+    action:
+      | 'name'
+      | 'description'
+      | 'photo'
+      | 'metadata/sync'
+      | 'participants/add'
+      | 'participants/remove'
+      | 'requests/list'
+      | 'requests/approve'
+      | 'requests/reject'
+      | 'admins/promote'
+      | 'admins/demote'
+      | 'mention'
+      | 'mention-all'
+      | 'mention-group'
+      | 'settings'
+      | 'leave'
+      | 'invite-link'
+      | 'invite-link/revoke',
+    body?: Record<string, unknown>,
+  ) =>
+    api<{ operationId: string; status: string }>(`/instances/${id}/groups/${encodeURIComponent(groupId)}/${action}`, {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
   contacts: (organizationId: string) => api<Contact[]>(`/contacts?organizationId=${encodeURIComponent(organizationId)}`),
   createContact: (input: { organizationId: string; name: string; ddi: string; phone: string }) =>
     api<Contact>('/contacts', {

@@ -6,6 +6,7 @@ import { fastifySwagger } from '@fastify/swagger';
 import scalarApiReference from '@scalar/fastify-api-reference';
 import Fastify from 'fastify';
 import path from 'node:path';
+import { ZodError } from 'zod';
 
 import { env } from '@ravoxzap/config';
 import { prisma } from '@ravoxzap/database';
@@ -79,6 +80,29 @@ app.setErrorHandler((error, _request, reply) => {
       message: error.message,
       code: error.code,
       details: error.details,
+    });
+    return;
+  }
+
+  if (error instanceof ZodError) {
+    reply.status(400).send({
+      message: 'Invalid request payload',
+      code: 'VALIDATION_ERROR',
+      details: error.issues,
+    });
+    return;
+  }
+
+  const requestBodyError = error as { code?: string; message?: string };
+
+  if (
+    requestBodyError.code === 'FST_ERR_CTP_EMPTY_JSON_BODY' ||
+    requestBodyError.code === 'FST_ERR_CTP_INVALID_JSON_BODY' ||
+    requestBodyError.message === 'Request body size did not match Content-Length'
+  ) {
+    reply.status(400).send({
+      message: requestBodyError.message,
+      code: 'INVALID_REQUEST_BODY',
     });
     return;
   }

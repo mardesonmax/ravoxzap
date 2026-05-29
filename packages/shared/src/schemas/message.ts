@@ -6,6 +6,7 @@ export const messageTypeSchema = z.enum([
   'AUDIO',
   'DOCUMENT',
   'VIDEO',
+  'STICKER',
   'UNKNOWN',
 ]);
 

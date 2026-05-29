@@ -31,6 +31,7 @@ enum MessageType {
   AUDIO
   DOCUMENT
   VIDEO
+  STICKER
   UNKNOWN
 }
 
@@ -72,6 +73,13 @@ enum JobLogStatus {
   FAILED
 }
 
+enum WhatsAppOperationStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
 model User {
   id           String   @id @default(cuid())
   name         String?
@@ -96,6 +104,7 @@ model Organization {
   contacts  Contact[]
   apiKeys   ApiKey[]
   webhooks  WebhookEndpoint[]
+  operations WhatsAppOperation[]
 }
 
 model OrganizationMember {
@@ -131,24 +140,37 @@ model WhatsAppInstance {
   chats        Chat[]
   messages     Message[]
   webhooks     WebhookEndpoint[]
+  groups       WhatsAppGroup[]
+  operations   WhatsAppOperation[]
 
   @@index([organizationId])
   @@index([status])
 }
 
 model Chat {
-  id         String   @id @default(cuid())
-  instanceId String
-  remoteJid  String
-  name       String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id                  String    @id @default(cuid())
+  instanceId          String
+  remoteJid           String
+  name                String?
+  archivedAt          DateTime?
+  pinnedAt            DateTime?
+  mutedUntil          DateTime?
+  isRead              Boolean   @default(false)
+  unreadCount         Int       @default(0)
+  ephemeralExpiration Int?
+  deletedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
 
   instance WhatsAppInstance @relation(fields: [instanceId], references: [id], onDelete: Cascade)
   messages Message[]
+  operations WhatsAppOperation[]
 
   @@unique([instanceId, remoteJid])
   @@index([instanceId])
+  @@index([instanceId, deletedAt])
+  @@index([instanceId, archivedAt])
+  @@index([instanceId, pinnedAt])
 }
 
 model Message {
@@ -156,6 +178,7 @@ model Message {
   instanceId     String
   chatId         String?
   remoteJid      String
+  participantJid String?
   fromMe         Boolean
   type           MessageType
   body           String?
@@ -172,6 +195,50 @@ model Message {
   @@index([instanceId, createdAt])
   @@index([chatId, createdAt])
   @@index([externalId])
+}
+
+model WhatsAppGroup {
+  id             String    @id @default(cuid())
+  instanceId     String
+  remoteJid      String
+  subject        String
+  description    String?
+  ownerJid       String?
+  size           Int?
+  announce       Boolean?
+  restrict       Boolean?
+  memberAddMode  Boolean?
+  joinApprovalMode Boolean?
+  ephemeralDuration Int?
+  pictureUrl     String?
+  inviteCode     String?
+  lastSyncedAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  instance     WhatsAppInstance            @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  participants WhatsAppGroupParticipant[]
+  operations   WhatsAppOperation[]
+
+  @@unique([instanceId, remoteJid])
+  @@index([instanceId, updatedAt])
+}
+
+model WhatsAppGroupParticipant {
+  id           String   @id @default(cuid())
+  groupId      String
+  jid          String
+  name         String?
+  isAdmin      Boolean  @default(false)
+  isSuperAdmin Boolean  @default(false)
+  joinedAt     DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  group WhatsAppGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, jid])
+  @@index([jid])
 }
 
 model Contact {
@@ -265,4 +332,29 @@ model JobLog {
 
   @@index([queueName, status])
   @@index([instanceId])
+}
+
+model WhatsAppOperation {
+  id             String                  @id @default(cuid())
+  organizationId String
+  instanceId     String
+  chatId         String?
+  groupId        String?
+  type           String
+  status         WhatsAppOperationStatus @default(QUEUED)
+  input          Json
+  result         Json?
+  error          String?
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  instance     WhatsAppInstance  @relation(fields: [instanceId], references: [id], onDelete: Cascade)
+  chat         Chat?             @relation(fields: [chatId], references: [id], onDelete: SetNull)
+  group        WhatsAppGroup?    @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([instanceId, status])
+  @@index([chatId])
+  @@index([groupId])
 }

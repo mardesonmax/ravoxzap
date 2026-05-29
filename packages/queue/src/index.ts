@@ -1,14 +1,25 @@
 import { Queue, type ConnectionOptions } from 'bullmq';
 
-import type { ConnectInstanceJob, DispatchWebhookJob, SendMessageJob } from '@ravoxzap/shared';
+import type {
+  ConnectInstanceJob,
+  DispatchWebhookJob,
+  SendMessageJob,
+  WhatsAppOperationJob,
+} from '@ravoxzap/shared';
 
-export type { ConnectInstanceJob, DispatchWebhookJob, SendMessageJob } from '@ravoxzap/shared';
+export type {
+  ConnectInstanceJob,
+  DispatchWebhookJob,
+  SendMessageJob,
+  WhatsAppOperationJob,
+} from '@ravoxzap/shared';
 
 export const queueNames = {
   connectInstance: 'connect-instance',
   disconnectInstance: 'disconnect-instance',
   sendMessage: 'send-message',
   dispatchWebhook: 'dispatch-webhook',
+  whatsappOperation: 'whatsapp-operation',
 } as const;
 
 export type RavoxQueues = ReturnType<typeof createQueues>;
@@ -34,6 +45,7 @@ export function createQueues(redisUrl: string) {
     disconnectInstance: new Queue<ConnectInstanceJob>(queueNames.disconnectInstance, { connection }),
     sendMessage: new Queue<SendMessageJob>(queueNames.sendMessage, { connection }),
     dispatchWebhook: new Queue<DispatchWebhookJob>(queueNames.dispatchWebhook, { connection }),
+    whatsappOperation: new Queue<WhatsAppOperationJob>(queueNames.whatsappOperation, { connection }),
   };
 }
 
@@ -43,5 +55,6 @@ export async function closeQueues(queues: RavoxQueues) {
     queues.disconnectInstance.close(),
     queues.sendMessage.close(),
     queues.dispatchWebhook.close(),
+    queues.whatsappOperation.close(),
   ]);
 }
