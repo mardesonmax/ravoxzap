@@ -1,36 +1,38 @@
 # RavoxZap
 
-Gateway/API multiusuario de WhatsApp via QR Code, com painel web, API publica, filas, worker Baileys, webhooks, envio de midia e historico de mensagens.
+Gateway/API multiusuário de WhatsApp via QR Code, com Dashboard administrativo, API pública, filas, worker Baileys, webhooks, envio de mídia e histórico de mensagens.
 
 ## Stack
 
 - Monorepo com Yarn Workspaces + Turbo
 - API Fastify + Zod + Prisma + PostgreSQL
 - Worker Node.js + BullMQ + Redis + Baileys
-- Web React/Vite + TanStack Query + Tailwind 4
+- Dashboard React/Vite + TanStack Query + Tailwind 4
+- RavoxChat React/Vite para testar a API pública
 - Storage local em `storage/media` e `storage/sessions`
 
 ## Portas
 
-| Servico | URL |
+| Serviço | URL |
 | --- | --- |
-| Web | `http://localhost:3004` |
-| Docs publicas | `http://localhost:3004/docs` |
+| Dashboard | `http://localhost:3004` |
+| RavoxChat | `http://localhost:3005` |
+| Docs públicas | `http://localhost:3004/docs` |
 | API | `http://localhost:3334` |
-| Docs tecnica da API | `http://localhost:3334/docs` |
+| Docs técnica da API | `http://localhost:3334/docs` |
 | Postgres local | `localhost:25432` |
 | Redis local | `localhost:26379` |
 
-## Opcao recomendada para desenvolvimento
+## Opção recomendada para desenvolvimento
 
-Use Node/Yarn no host e Docker apenas para Postgres e Redis. Essa e a forma padrao do projeto: os servicos ficam em containers, enquanto web, API e worker rodam localmente com recarregamento rapido.
+Use Node/Yarn no host e Docker apenas para Postgres e Redis. Essa é a forma padrão do projeto: os serviços ficam em containers, enquanto Dashboard, API e worker rodam localmente com recarregamento rápido.
 
 ### Requisitos
 
 - Node.js 24 ou superior
 - Yarn 1.22.22
 - Docker Desktop ou Docker Engine
-- ffmpeg no host para envio de audio gravado pelo painel
+- ffmpeg no host para envio de áudio gravado pelo painel
 
 Instale o Yarn, se precisar:
 
@@ -68,12 +70,15 @@ yarn dev
 O comando `yarn dev` sobe:
 
 - `apps/api` em `http://localhost:3334`
-- `apps/web` em `http://localhost:3004`
+- `apps/dashboard` em `http://localhost:3004`
+- `apps/ravoxchat` em `http://localhost:3005`
 - `apps/worker` processando WhatsApp, filas e webhooks
+
+Se quiser subir apenas o RavoxChat em outro terminal, use `yarn dev:chat`.
 
 ## Docker local
 
-O `docker-compose.yml` sobe somente as dependencias locais:
+O `docker-compose.yml` sobe somente as dependências locais:
 
 - Postgres em `localhost:25432`
 - Redis em `localhost:26379`
@@ -90,38 +95,38 @@ Para ver logs:
 docker compose logs -f postgres redis
 ```
 
-Para parar os servicos:
+Para parar os serviços:
 
 ```bash
 docker compose down
 ```
 
-Para apagar tambem os dados do banco local:
+Para apagar também os dados do banco local:
 
 ```bash
 docker compose down -v
 ```
 
-## Variaveis de ambiente
+## Variáveis de ambiente
 
 Use `.env.example` como base para o `.env` local.
 
-Principais variaveis:
+Principais variáveis:
 
-| Variavel | Uso |
+| Variável | Uso |
 | --- | --- |
-| `DATABASE_URL` | Conexao PostgreSQL |
-| `REDIS_URL` | Conexao Redis/BullMQ |
+| `DATABASE_URL` | Conexão PostgreSQL |
+| `REDIS_URL` | Conexão Redis/BullMQ |
 | `PORT` | Porta da API |
-| `API_BASE_URL` | URL publica da API |
-| `WEB_BASE_URL` | URL publica do painel |
+| `API_BASE_URL` | URL pública da API |
+| `WEB_BASE_URL` | URL pública do Dashboard |
 | `VITE_API_BASE_URL` | URL da API usada pelo browser |
-| `JWT_SECRET` | Assinatura da sessao do painel |
-| `API_KEY_SECRET` | Hash/validacao de API Keys |
-| `WORKER_SECRET` | Segredo interno reservado entre servicos |
-| `SESSION_STORAGE_PATH` | Pasta de sessoes Baileys |
+| `JWT_SECRET` | Assinatura da sessão do painel |
+| `API_KEY_SECRET` | Hash/validação de API Keys |
+| `WORKER_SECRET` | Segredo interno reservado entre serviços |
+| `SESSION_STORAGE_PATH` | Pasta de sessões Baileys |
 
-Em producao, troque todos os secrets `change-me-*`.
+Em produção, troque todos os secrets `change-me-*`.
 
 ## Conta seed
 
@@ -130,10 +135,10 @@ Criada com `yarn db:seed`:
 ```txt
 E-mail: admin@ravoxzap.local
 Senha: ravoxzap123
-Organizacao: Ravox Labs
+Organização: Ravox Labs
 ```
 
-Voce pode mudar esses valores no `.env`:
+Você pode mudar esses valores no `.env`:
 
 ```env
 SEED_ADMIN_NAME="Max"
@@ -148,25 +153,27 @@ SEED_ORGANIZATION_NAME="Ravox Labs"
 2. Suba o projeto com `yarn dev`.
 3. Acesse `http://localhost:3004`.
 4. Entre com a conta seed ou cadastre uma conta.
-5. Crie uma instancia em `Instancias`.
-6. Abra a instancia e escaneie o QR Code pelo WhatsApp do celular em **Aparelhos conectados**.
-7. Quando ficar `Conectada`, use `Conversas` para enviar texto, imagem, audio, video ou documento.
+5. Crie uma instância em `Instâncias`.
+6. Abra a instância e escaneie o QR Code pelo WhatsApp do celular em **Aparelhos conectados**.
+7. Quando ficar `Conectada`, crie uma API Key no Dashboard.
+8. Abra o RavoxChat em `http://localhost:3005` e informe `API Base URL`, `API Key` e `Instance ID`.
+9. Use o RavoxChat para testar envio de texto, imagem, áudio, vídeo ou documento pela API pública.
 
-As sessoes ficam em:
+As sessões ficam em:
 
 ```txt
 storage/sessions/{instanceId}
 ```
 
-Midias ficam em:
+Mídias ficam em:
 
 ```txt
 storage/media/{instanceId}
 ```
 
-Para forcar um QR novo, use a opcao de limpar sessao no painel. Em ultimo caso, pare o worker, remova a pasta da instancia em `storage/sessions/{instanceId}` e suba novamente.
+Para forçar um QR novo, use a opção de limpar sessão no painel. Em último caso, pare o worker, remova a pasta da instância em `storage/sessions/{instanceId}` e suba novamente.
 
-## API publica
+## API pública
 
 Crie uma API Key no painel e use:
 
@@ -174,7 +181,25 @@ Crie uma API Key no painel e use:
 Authorization: Bearer ravox_live_xxxxx
 ```
 
-Endpoints disponiveis hoje:
+Para enviar mensagens, use o campo `to` em formato internacional. No Brasil, o formato é `+55 + DDD + número`.
+
+```json
+{
+  "to": "+5585999999999",
+  "body": "Olá"
+}
+```
+
+Também é aceito enviar somente dígitos:
+
+```json
+{
+  "to": "5585999999999",
+  "body": "Olá"
+}
+```
+
+Principais endpoints disponíveis hoje:
 
 ```txt
 POST /v1/instances/:instanceId/send-text
@@ -182,17 +207,117 @@ POST /v1/instances/:instanceId/send-image
 POST /v1/instances/:instanceId/send-audio
 POST /v1/instances/:instanceId/send-video
 POST /v1/instances/:instanceId/send-document
+POST /v1/instances/:instanceId/send-location
+POST /v1/instances/:instanceId/send-contact
+POST /v1/instances/:instanceId/send-contacts
+POST /v1/instances/:instanceId/send-sticker
+POST /v1/instances/:instanceId/send-gif
+POST /v1/instances/:instanceId/send-link
+POST /v1/instances/:instanceId/send-reaction
+POST /v1/instances/:instanceId/remove-reaction
+POST /v1/instances/:instanceId/send-poll
+POST /v1/instances/:instanceId/send-ptv
+POST /v1/instances/:instanceId/messages/reply
+POST /v1/instances/:instanceId/messages/forward
+POST /v1/instances/:instanceId/messages/delete
+POST /v1/instances/:instanceId/messages/read
+POST /v1/instances/:instanceId/messages/pin
 
 GET  /v1/instances/:instanceId/status
 GET  /v1/instances/:instanceId/qrcode
+GET  /v1/instances/:instanceId/me
+GET  /v1/instances/:instanceId/device
+POST /v1/instances/:instanceId/pairing-code
+POST /v1/instances/:instanceId/profile/name
+POST /v1/instances/:instanceId/profile/description
+POST /v1/instances/:instanceId/profile/picture
+POST /v1/instances/:instanceId/profile/picture/remove
 POST /v1/instances/:instanceId/restart
 POST /v1/instances/:instanceId/logout
 
+POST /v1/instances/:instanceId/status/send-text
+POST /v1/instances/:instanceId/status/send-image
+POST /v1/instances/:instanceId/status/send-video
+POST /v1/instances/:instanceId/status/reply-text
+POST /v1/instances/:instanceId/status/reply-sticker
+POST /v1/instances/:instanceId/status/reply-gif
+
+POST /v1/instances/:instanceId/contacts/check
+POST /v1/instances/:instanceId/contacts/check-batch
+POST /v1/instances/:instanceId/contacts
+DELETE /v1/instances/:instanceId/contacts/:phone
+GET  /v1/instances/:instanceId/contacts/:phone/metadata
+GET  /v1/instances/:instanceId/contacts/:phone/profile-picture
+POST /v1/instances/:instanceId/contacts/:phone/block
+POST /v1/instances/:instanceId/contacts/:phone/unblock
+
+GET  /v1/instances/:instanceId/privacy
+GET  /v1/instances/:instanceId/privacy/blocklist
+POST /v1/instances/:instanceId/privacy/last-seen
+POST /v1/instances/:instanceId/privacy/online
+POST /v1/instances/:instanceId/privacy/profile-picture
+POST /v1/instances/:instanceId/privacy/status
+POST /v1/instances/:instanceId/privacy/read-receipts
+POST /v1/instances/:instanceId/privacy/group-add
+POST /v1/instances/:instanceId/privacy/default-disappearing
+
+GET  /v1/instances/:instanceId/groups
+POST /v1/instances/:instanceId/groups
+POST /v1/instances/:instanceId/groups/sync
+POST /v1/instances/:instanceId/groups/invite/accept
+POST /v1/instances/:instanceId/groups/invite/metadata
+GET  /v1/instances/:instanceId/groups/:groupId/metadata/light
+POST /v1/instances/:instanceId/groups/:groupId/metadata/sync
+POST /v1/instances/:instanceId/groups/:groupId/photo
+POST /v1/instances/:instanceId/groups/:groupId/settings
+POST /v1/instances/:instanceId/groups/:groupId/requests/list
+POST /v1/instances/:instanceId/groups/:groupId/requests/approve
+POST /v1/instances/:instanceId/groups/:groupId/requests/reject
+
+POST /v1/instances/:instanceId/communities
+POST /v1/instances/:instanceId/communities/sync
+POST /v1/instances/:instanceId/communities/invite/accept
+GET  /v1/instances/:instanceId/communities/:communityId
+POST /v1/instances/:instanceId/communities/:communityId/settings
+POST /v1/instances/:instanceId/communities/:communityId/groups/link
+POST /v1/instances/:instanceId/communities/:communityId/groups/unlink
+
+GET  /v1/instances/:instanceId/newsletters
+POST /v1/instances/:instanceId/newsletters
+POST /v1/instances/:instanceId/newsletters/search
+GET  /v1/instances/:instanceId/newsletters/:newsletterId
+POST /v1/instances/:instanceId/newsletters/:newsletterId/follow
+POST /v1/instances/:instanceId/newsletters/:newsletterId/unfollow
+POST /v1/instances/:instanceId/newsletters/:newsletterId/mute
+POST /v1/instances/:instanceId/newsletters/:newsletterId/unmute
+GET  /v1/instances/:instanceId/newsletters/:newsletterId/messages
+
+GET  /v1/instances/:instanceId/business/profile
+PATCH /v1/instances/:instanceId/business/profile
+GET  /v1/instances/:instanceId/business/products
+POST /v1/instances/:instanceId/business/products
+GET  /v1/instances/:instanceId/business/products/:productId
+PATCH /v1/instances/:instanceId/business/products/:productId
+DELETE /v1/instances/:instanceId/business/products/:productId
+GET  /v1/instances/:instanceId/business/collections
+POST /v1/instances/:instanceId/business/tags
+
+GET  /v1/instances/:instanceId/queue
+DELETE /v1/instances/:instanceId/queue
+GET  /v1/instances/:instanceId/queue/settings
+PATCH /v1/instances/:instanceId/queue/settings
+DELETE /v1/instances/:instanceId/queue/:queueItemId
+
 GET  /v1/instances/:instanceId/chats
 GET  /v1/instances/:instanceId/chats/:chatId/messages
+GET  /v1/instances/:instanceId/operations/:operationId
 ```
 
-A documentacao visual da API publica fica em:
+Operações do WhatsApp que dependem de estado real do socket são assíncronas: a resposta traz `operationId` e o resultado final deve ser consultado em `/v1/instances/:instanceId/operations/:operationId`.
+
+Algumas capacidades aparecem como endpoint, mas falham explicitamente enquanto o adapter Baileys não oferecer suporte confiável, por exemplo voto em enquete, denunciar contato, busca pública de canais e aceite genérico de convite admin de canal.
+
+A documentação visual da API pública fica em:
 
 ```txt
 http://localhost:3004/docs
@@ -202,7 +327,8 @@ http://localhost:3004/docs
 
 ```bash
 yarn dev
-yarn dev:web
+yarn dev:dashboard
+yarn dev:chat
 yarn dev:api
 yarn dev:worker
 
@@ -217,11 +343,11 @@ yarn db:seed
 yarn db:studio
 ```
 
-Observacao: no Yarn 1, use `yarn run check`, `yarn run lint` e `yarn run build` se quiser garantir que o script do projeto sera executado. O comando `yarn check` sozinho e um comando interno do Yarn.
+Observação: no Yarn 1, use `yarn run check`, `yarn run lint` e `yarn run build` se quiser garantir que o script do projeto será executado. O comando `yarn check` sozinho é um comando interno do Yarn.
 
-## Migracoes e banco
+## Migrações e banco
 
-Criar/aplicar migracoes:
+Criar/aplicar migrações:
 
 ```bash
 yarn db:migrate
@@ -243,8 +369,9 @@ yarn db:generate
 
 ```txt
 apps/
-  api/       API Fastify privada/publica
-  web/       Painel React/Vite
+  api/       API Fastify privada/pública
+  dashboard/ Painel administrativo React/Vite
+  ravoxchat/ Cliente de teste da API pública
   worker/    Worker Baileys + BullMQ
 
 packages/
@@ -261,15 +388,15 @@ storage/
   sessions/  credenciais e estado do WhatsApp Web
 ```
 
-## Troubleshooting
+## Solução de problemas
 
-### O QR Code abre, mas o WhatsApp diz que nao pode conectar
+### O QR Code abre, mas o WhatsApp diz que não pode conectar
 
-Gere um novo QR pelo painel. Se continuar, limpe a sessao da instancia e tente novamente. O QR expira rapido e o WhatsApp tambem pode bloquear novas conexoes temporariamente.
+Gere um novo QR pelo painel. Se continuar, limpe a sessão da instância e tente novamente. O QR expira rápido e o WhatsApp também pode bloquear novas conexões temporariamente.
 
-### Audio aparece no painel, mas nao chega no WhatsApp
+### Áudio aparece no painel, mas não chega no WhatsApp
 
-Verifique se o worker foi reiniciado depois das alteracoes e se `ffmpeg` esta instalado no ambiente do worker.
+Verifique se o worker foi reiniciado depois das alterações e se `ffmpeg` está instalado no ambiente do worker.
 
 Local:
 
@@ -280,26 +407,26 @@ yarn dev:worker
 
 ### Mensagem fica enfileirada
 
-Confirme se Redis, API e worker estao rodando:
+Confirme se Redis, API e worker estão rodando:
 
 ```bash
 docker compose ps
 yarn dev:worker
 ```
 
-### API nao conecta no banco
+### API não conecta no banco
 
-Confirme se os servicos estao ativos e se o `.env` usa as portas locais do Compose:
+Confirme se os serviços estão ativos e se o `.env` usa as portas locais do Compose:
 
 ```env
 DATABASE_URL="postgresql://ravoxzap:ravoxzap@localhost:25432/ravoxzap"
 REDIS_URL="redis://localhost:26379"
 ```
 
-### Nao suba sessoes para o Git
+### Não suba sessões para o Git
 
-Os arquivos em `storage/sessions` sao credenciais do WhatsApp Web. Eles ficam ignorados no `.gitignore` e nao devem ser commitados.
+Os arquivos em `storage/sessions` são credenciais do WhatsApp Web. Eles ficam ignorados no `.gitignore` e não devem ser commitados.
 
 ## Aviso importante
 
-O RavoxZap usa Baileys/WhatsApp Web. Nao e a API oficial Cloud da Meta. Use com responsabilidade, evite disparos em massa e prefira testes controlados.
+O RavoxZap usa Baileys/WhatsApp Web. Não é a API oficial Cloud da Meta. Use com responsabilidade, evite disparos em massa e prefira testes controlados.

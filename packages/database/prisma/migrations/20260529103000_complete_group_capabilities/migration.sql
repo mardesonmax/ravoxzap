@@ -1,0 +1,5 @@
+ALTER TABLE "WhatsAppGroup"
+  ADD COLUMN IF NOT EXISTS "memberAddMode" BOOLEAN,
+  ADD COLUMN IF NOT EXISTS "joinApprovalMode" BOOLEAN,
+  ADD COLUMN IF NOT EXISTS "ephemeralDuration" INTEGER,
+  ADD COLUMN IF NOT EXISTS "pictureUrl" TEXT;

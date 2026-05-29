@@ -1,0 +1,95 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+:root {
+  color: #f7f6f2;
+  background: #0b0c11;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --ravox-bg: #0b0c11;
+  --ravox-panel: #111318;
+  --ravox-card: #181a21;
+  --ravox-card-soft: #1f2128;
+  --ravox-border: #2d3036;
+  --ravox-muted: #b2b2b2;
+  --ravox-subtle: #646a7a;
+  --ravox-accent: #2edb5c;
+  --ravox-accent-strong: #24a84f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background: var(--ravox-bg);
+}
+
+.hide-scrollbar {
+  scrollbar-width: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.themed-scrollbar {
+  scrollbar-color: rgba(46, 219, 92, 0.55) #111318;
+  scrollbar-width: thin;
+}
+
+.themed-scrollbar::-webkit-scrollbar {
+  width: 0.625rem;
+  height: 0.625rem;
+}
+
+.themed-scrollbar::-webkit-scrollbar-track {
+  background: #111318;
+  border-left: 1px solid #2d3036;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #2edb5c, #198f42);
+  border: 3px solid #111318;
+  border-radius: 999px;
+}
+
+.themed-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #52ec78, #24a84f);
+}
+
+.chat-wallpaper {
+  background-color: #0b0f0f;
+  background-image:
+    radial-gradient(circle at 16px 18px, rgba(255, 255, 255, 0.045) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 55px 42px, rgba(255, 255, 255, 0.035) 0 1.25px, transparent 1.75px),
+    linear-gradient(135deg, transparent 0 46%, rgba(255, 255, 255, 0.025) 47% 49%, transparent 50% 100%);
+  background-size: 92px 92px, 92px 92px, 46px 46px;
+}
+
+.ravox-audio {
+  color-scheme: light;
+}
+
+.ravox-audio::-webkit-media-controls-panel {
+  background-color: #f5f6f6;
+}
+
+.chat-shell audio {
+  max-width: 100%;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.status-dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 999px;
+}

@@ -1,15 +1,20 @@
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
+  Archive,
   ArrowLeft,
   Bell,
   BarChart3,
   Check,
   CheckCheck,
   CheckCircle2,
+  ChevronDown,
   CircleAlert,
   Clock3,
   Copy,
+  Crown,
+  DoorOpen,
+  Eraser,
   FileText,
   KeyRound,
   LogOut,
@@ -19,16 +24,20 @@ import {
   Mic,
   MoreVertical,
   Paperclip,
+  Pin,
   Power,
   Plus,
   QrCode,
   RefreshCw,
   Search,
   Send,
+  Smile,
   Smartphone,
   Square,
   Trash2,
   UserPlus,
+  Users,
+  VolumeX,
   Webhook,
   X,
 } from 'lucide-react';
@@ -47,8 +56,10 @@ import {
   type Contact,
   type DashboardSummary,
   type InstanceStatus,
+  type Message,
   type Organization,
   type WebhookEndpoint,
+  type WhatsAppGroup,
   type WhatsAppInstance,
 } from './lib/api';
 
@@ -67,7 +78,7 @@ const statusConfig: Record<InstanceStatus, { label: string; color: string }> = {
   LOGGED_OUT: { label: 'Sessão removida', color: 'bg-gray-700' },
 };
 
-type DashboardView = 'dashboard' | 'instances' | 'chats' | 'api-keys' | 'docs';
+type DashboardView = 'dashboard' | 'instances' | 'api-keys' | 'docs';
 type InstanceTab = 'details' | 'webhooks';
 
 type DashboardRoute = {
@@ -89,7 +100,6 @@ const emptyComposerDraft: ComposerDraft = {
 const viewPaths: Record<DashboardView, string> = {
   dashboard: '/dashboard',
   instances: '/dashboard/instances',
-  chats: '/dashboard/chats',
   'api-keys': '/dashboard/api-keys',
   docs: '/docs',
 };
@@ -107,7 +117,6 @@ function parseDashboardRoute(pathname = window.location.pathname): DashboardRout
       };
     }
 
-    if (segments[1] === 'chats') return { view: 'chats', instanceTab: 'details' };
     if (segments[1] === 'api-keys') return { view: 'api-keys', instanceTab: 'details' };
     if (segments[1] === 'docs' || segments[1] === 'settings') return { view: 'docs', instanceTab: 'details' };
   }
@@ -559,6 +568,18 @@ function mediaKindLabel(kind?: string) {
   return 'Arquivo';
 }
 
+function mediaDownloadMissingLabel(kind?: string | null) {
+  return `${mediaKindLabel(kind ?? undefined)} não baixado`;
+}
+
+function shouldShowMediaDownloadWarning(message: Message) {
+  return Boolean(
+    !message.mediaUrl &&
+      message.type &&
+      ['IMAGE', 'AUDIO', 'VIDEO', 'DOCUMENT'].includes(message.type),
+  );
+}
+
 function chatPreviewFromMessage(message?: NonNullable<Chat['messages']>[number]) {
   if (!message) return 'Sem mensagens ainda';
   const prefix = message.fromMe ? 'Você: ' : '';
@@ -717,7 +738,6 @@ function Sidebar({
   const items: Array<{ id: DashboardView; label: string; icon: typeof Activity }> = [
     { id: 'dashboard', label: 'Dashboard', icon: Activity },
     { id: 'instances', label: 'Instâncias', icon: Smartphone },
-    { id: 'chats', label: 'Conversas', icon: MessageSquareText },
     { id: 'api-keys', label: 'API Keys', icon: KeyRound },
     { id: 'docs', label: 'Docs', icon: FileText },
   ];
@@ -749,6 +769,11 @@ function Sidebar({
             <button
               key={item.id}
               onClick={() => {
+                if (item.id === 'docs') {
+                  window.open('/docs', '_blank', 'noopener,noreferrer');
+                  onNavigate?.();
+                  return;
+                }
                 setView(item.id);
                 onNavigate?.();
               }}
@@ -1302,7 +1327,424 @@ function InstanceConnectionCard({ instance }: { instance: WhatsAppInstance }) {
   );
 }
 
-function ChatsView({
+function splitParticipants(value: string) {
+  return value
+    .split(/[\n,; ]+/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function _GroupsView({
+  instances,
+  selectedInstance,
+  setSelectedInstanceId,
+}: {
+  instances: WhatsAppInstance[];
+  selectedInstance?: WhatsAppInstance;
+  setSelectedInstanceId: (id: string | null) => void;
+}) {
+  const queryClient = useQueryClient();
+  const connectedInstances = instances.filter(instance => instance.status === 'CONNECTED');
+  const groupInstance = connectedInstances.find(instance => instance.id === selectedInstance?.id) ?? connectedInstances[0] ?? instances[0];
+  const [search, setSearch] = useState('');
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
+  const [newGroupOpen, setNewGroupOpen] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [participants, setParticipants] = useState('');
+  const [autoInvite, setAutoInvite] = useState(true);
+  const [participantAction, setParticipantAction] = useState('');
+  const [mentionText, setMentionText] = useState('');
+  const [groupPhotoInput, setGroupPhotoInput] = useState('');
+
+  const groups = useQuery({
+    queryKey: ['groups', groupInstance?.id],
+    queryFn: () => apiClient.groups(groupInstance!.id),
+    enabled: Boolean(groupInstance?.id),
+    refetchInterval: 5000,
+  });
+  const groupList = groups.data ?? [];
+  const filteredGroups = groupList.filter(group => {
+    const value = `${group.subject} ${group.remoteJid}`.toLowerCase();
+    return value.includes(search.toLowerCase());
+  });
+  const selectedGroup = groupList.find(group => group.id === selectedGroupId) ?? filteredGroups[0];
+
+  const invalidateGroups = () => {
+    void queryClient.invalidateQueries({ queryKey: ['groups', groupInstance?.id] });
+  };
+  const syncGroups = useMutation({
+    mutationFn: () => apiClient.syncGroups(groupInstance!.id),
+    onSuccess: invalidateGroups,
+  });
+  const createGroup = useMutation({
+    mutationFn: () => apiClient.createGroup(groupInstance!.id, {
+      name: groupName,
+      participants: splitParticipants(participants),
+      autoInvite,
+    }),
+    onSuccess: () => {
+      setGroupName('');
+      setParticipants('');
+      setAutoInvite(true);
+      setNewGroupOpen(false);
+      invalidateGroups();
+    },
+  });
+  const groupOperation = useMutation({
+    mutationFn: (input: { action: Parameters<typeof apiClient.groupOperation>[2]; body?: Record<string, unknown> }) =>
+      apiClient.groupOperation(groupInstance!.id, selectedGroup!.id, input.action, input.body),
+    onSuccess: invalidateGroups,
+  });
+
+  if (!groupInstance) {
+    return (
+      <section className="rounded-lg border border-[#2d3036] bg-[#181a21] p-8 text-center text-gray-400">
+        Crie e conecte uma instância para operar grupos.
+      </section>
+    );
+  }
+
+  return (
+    <section className="grid min-h-[calc(100dvh-8rem)] gap-4 lg:grid-cols-[360px_1fr]">
+      <aside className="rounded-lg border border-[#2d3036] bg-[#181a21]">
+        <div className="space-y-4 border-b border-[#2d3036] p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-semibold">Grupos</h2>
+              <p className="text-sm text-gray-400">{groupList.length} grupos sincronizados</p>
+            </div>
+            <Button type="button" variant="ghost" className="h-10 w-10 px-0" onClick={() => setNewGroupOpen(true)}>
+              <Plus size={16} />
+            </Button>
+          </div>
+          <div>
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-gray-500">Instância conectada</label>
+            <Select
+              value={groupInstance.id}
+              onChange={event => setSelectedInstanceId(event.target.value)}
+            >
+              {connectedInstances.map(instance => (
+                <option key={instance.id} value={instance.id}>
+                  {instance.name} - {instance.phoneNumber ?? 'sem número'}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="grid grid-cols-[1fr_auto] gap-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-600" size={17} />
+              <Input className="pl-9" placeholder="Buscar grupo..." value={search} onChange={event => setSearch(event.target.value)} />
+            </div>
+            <Button type="button" variant="ghost" className="h-10 w-10 px-0" disabled={syncGroups.isPending} onClick={() => syncGroups.mutate()}>
+              <RefreshCw size={16} className={syncGroups.isPending ? 'animate-spin' : ''} />
+            </Button>
+          </div>
+        </div>
+
+        <div className="max-h-[calc(100dvh-21rem)] overflow-y-auto">
+          {filteredGroups.map(group => {
+            const selected = selectedGroup?.id === group.id;
+            return (
+              <button
+                key={group.id}
+                type="button"
+                className={`flex w-full cursor-pointer items-center gap-3 border-b border-[#2d3036] p-4 text-left transition ${selected ? 'bg-[#23262e]' : 'hover:bg-[#1d2027]'}`}
+                onClick={() => setSelectedGroupId(group.id)}
+              >
+                {group.pictureUrl ? (
+                  <img src={group.pictureUrl} alt="" className="h-11 w-11 shrink-0 rounded-full object-cover" />
+                ) : (
+                  <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#2b3038] text-sm font-semibold">
+                    {group.subject.slice(0, 2).toUpperCase()}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-semibold">{group.subject}</p>
+                  <p className="truncate text-sm text-gray-400">{group.size ?? group.participants?.length ?? 0} participantes</p>
+                </div>
+              </button>
+            );
+          })}
+          {filteredGroups.length === 0 && (
+            <div className="p-6 text-sm text-gray-500">Nenhum grupo sincronizado para esta instância.</div>
+          )}
+        </div>
+      </aside>
+
+      <article className="rounded-lg border border-[#2d3036] bg-[#181a21]">
+        {selectedGroup ? (
+          <>
+            <div className="flex flex-col gap-3 border-b border-[#2d3036] p-5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="min-w-0">
+                <h2 className="truncate text-xl font-semibold">{selectedGroup.subject}</h2>
+                <p className="truncate text-sm text-gray-400">{selectedGroup.remoteJid}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  disabled={groupOperation.isPending}
+                  onClick={() => groupOperation.mutate({ action: 'invite-link' })}
+                >
+                  Convite
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  disabled={groupOperation.isPending}
+                  onClick={() => groupOperation.mutate({ action: 'leave' })}
+                >
+                  <DoorOpen size={16} />
+                  Sair
+                </Button>
+              </div>
+            </div>
+
+            <div className="grid gap-4 p-5 xl:grid-cols-[1.1fr_0.9fr]">
+              <div className="space-y-4">
+                <div className="rounded-lg border border-[#2d3036] bg-[#111318] p-4">
+                  <h3 className="font-semibold">Dados do grupo</h3>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Assunto</p>
+                      <p className="mt-1 text-sm text-gray-200">{selectedGroup.subject}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Participantes</p>
+                      <p className="mt-1 text-sm text-gray-200">{selectedGroup.size ?? selectedGroup.participants?.length ?? 0}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Mensagens</p>
+                      <p className="mt-1 text-sm text-gray-200">{selectedGroup.announce ? 'Só admins' : 'Todos'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Aprovação</p>
+                      <p className="mt-1 text-sm text-gray-200">{selectedGroup.joinApprovalMode ? 'Ativa' : 'Inativa'}</p>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Descrição</p>
+                      <p className="mt-1 text-sm text-gray-300">{selectedGroup.description || 'Sem descrição'}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-[#2d3036] bg-[#111318] p-4">
+                  <h3 className="font-semibold">Administração</h3>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+                    <Input
+                      placeholder="URL ou base64 da foto"
+                      value={groupPhotoInput}
+                      onChange={event => setGroupPhotoInput(event.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={!groupPhotoInput.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ action: 'photo', body: { image: groupPhotoInput } })}
+                    >
+                      Foto
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ action: 'metadata/sync' })}
+                    >
+                      Metadata
+                    </Button>
+                  </div>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ action: 'settings', body: { messages: selectedGroup.announce ? 'all' : 'admins' } })}
+                    >
+                      {selectedGroup.announce ? 'Liberar mensagens' : 'Só admins'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ action: 'settings', body: { joinApproval: !selectedGroup.joinApprovalMode } })}
+                    >
+                      {selectedGroup.joinApprovalMode ? 'Desativar aprovação' : 'Exigir aprovação'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ action: 'requests/list' })}
+                    >
+                      Solicitações
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-[#2d3036] bg-[#111318] p-4">
+                  <h3 className="font-semibold">Operações rápidas</h3>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_auto_auto]">
+                    <Input
+                      placeholder="Telefones separados por vírgula"
+                      value={participantAction}
+                      onChange={event => setParticipantAction(event.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={!participantAction.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ action: 'participants/add', body: { participants: splitParticipants(participantAction), autoInvite: true } })}
+                    >
+                      <UserPlus size={16} />
+                      Adicionar
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={!participantAction.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ action: 'admins/promote', body: { participants: splitParticipants(participantAction) } })}
+                    >
+                      <Crown size={16} />
+                      Admin
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={!participantAction.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ action: 'requests/approve', body: { participants: splitParticipants(participantAction) } })}
+                    >
+                      Aprovar
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      disabled={!participantAction.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ action: 'participants/remove', body: { participants: splitParticipants(participantAction) } })}
+                    >
+                      Remover
+                    </Button>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_auto_auto]">
+                    <Input
+                      placeholder="Mensagem com menção"
+                      value={mentionText}
+                      onChange={event => setMentionText(event.target.value)}
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={!mentionText.trim() || !participantAction.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({
+                        action: 'mention',
+                        body: { text: mentionText, participants: splitParticipants(participantAction) },
+                      })}
+                    >
+                      Mencionar
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={!mentionText.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ action: 'mention-all', body: { text: mentionText } })}
+                    >
+                      Todos
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-[#2d3036] bg-[#111318]">
+                <div className="border-b border-[#2d3036] p-4">
+                  <h3 className="font-semibold">Participantes</h3>
+                  <p className="text-sm text-gray-400">Admins e membros sincronizados do cache.</p>
+                </div>
+                <div className="max-h-[520px] overflow-y-auto">
+                  {(selectedGroup.participants ?? []).map(participant => (
+                    <div key={participant.id} className="flex items-center justify-between gap-3 border-b border-[#2d3036] p-4">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{participant.name || participant.jid}</p>
+                        <p className="truncate text-sm text-gray-500">{participant.jid}</p>
+                      </div>
+                      {participant.isAdmin && (
+                        <span className="rounded-full border border-[#2d3036] px-2 py-1 text-xs text-[#2edb5c]">
+                          {participant.isSuperAdmin ? 'super admin' : 'admin'}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                  {(!selectedGroup.participants || selectedGroup.participants.length === 0) && (
+                    <div className="p-6 text-sm text-gray-500">Sincronize grupos para carregar participantes.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="flex min-h-[520px] items-center justify-center text-sm text-gray-500">
+            Selecione ou sincronize um grupo.
+          </div>
+        )}
+      </article>
+
+      {newGroupOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <form
+            className="w-full max-w-lg rounded-lg border border-[#2d3036] bg-[#181a21] shadow-[0_24px_90px_rgba(0,0,0,0.55)]"
+            onSubmit={event => {
+              event.preventDefault();
+              createGroup.mutate();
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-[#2d3036] p-4">
+              <div>
+                <h2 className="text-lg font-semibold">Novo grupo</h2>
+                <p className="text-sm text-gray-400">A criação roda pelo worker e pode levar alguns segundos.</p>
+              </div>
+              <button
+                type="button"
+                className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-gray-400 transition hover:bg-[#23262e] hover:text-white"
+                onClick={() => setNewGroupOpen(false)}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid gap-3 p-4">
+              <Input placeholder="Nome do grupo" value={groupName} onChange={event => setGroupName(event.target.value)} />
+              <textarea
+                className="min-h-28 rounded-md border border-[#2d3036] bg-[#111318] p-3 text-sm text-gray-100 outline-none transition placeholder:text-gray-600 hover:border-gray-600 focus:border-[#2edb5c]"
+                placeholder="Participantes separados por vírgula ou linha"
+                value={participants}
+                onChange={event => setParticipants(event.target.value)}
+              />
+              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-[#2d3036] bg-[#111318] p-3 text-sm text-gray-300">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 accent-[#2edb5c]"
+                  checked={autoInvite}
+                  onChange={event => setAutoInvite(event.target.checked)}
+                />
+                <span>
+                  <span className="block font-medium text-gray-100">Enviar convite automaticamente</span>
+                  <span className="mt-1 block text-gray-500">Se alguém não puder ser adicionado direto, o worker envia o link do grupo no privado.</span>
+                </span>
+              </label>
+            </div>
+            <div className="grid gap-2 border-t border-[#2d3036] p-4 sm:flex sm:justify-end">
+              <Button type="button" variant="ghost" className="w-full sm:w-auto" onClick={() => setNewGroupOpen(false)}>
+                Cancelar
+              </Button>
+              <Button type="submit" className="w-full sm:w-auto" disabled={!groupName.trim() || splitParticipants(participants).length === 0 || createGroup.isPending}>
+                <Users size={16} />
+                Criar grupo
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function _ChatsView({
   organizationId,
   instances,
   selectedInstance,
@@ -1315,11 +1757,23 @@ function ChatsView({
 }) {
   const [selectedChat, setSelectedChat] = useState<Chat | null>(null);
   const [selectedContact, setSelectedContact] = useState<Contact | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<WhatsAppGroup | null>(null);
   const [contactModalOpen, setContactModalOpen] = useState(false);
   const [contactName, setContactName] = useState('');
   const [contactDdi, setContactDdi] = useState('55');
   const [contactPhone, setContactPhone] = useState('');
   const [contactSearch, setContactSearch] = useState('');
+  const [chatFilter, setChatFilter] = useState<'all' | 'private' | 'groups' | 'archived' | 'pinned' | 'unread'>('all');
+  const [openChatMenuId, setOpenChatMenuId] = useState<string | null>(null);
+  const [newEntryMenuOpen, setNewEntryMenuOpen] = useState(false);
+  const [attachmentMenuOpen, setAttachmentMenuOpen] = useState(false);
+  const [newGroupOpen, setNewGroupOpen] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupParticipants, setNewGroupParticipants] = useState('');
+  const [newGroupAutoInvite, setNewGroupAutoInvite] = useState(true);
+  const [groupActionsOpen, setGroupActionsOpen] = useState(false);
+  const [groupParticipantInput, setGroupParticipantInput] = useState('');
+  const [groupMentionText, setGroupMentionText] = useState('');
   const [composerDrafts, setComposerDrafts] = useState<Record<string, ComposerDraft>>({});
   const [isRecordingAudio, setIsRecordingAudio] = useState(false);
   const [recordingLevel, setRecordingLevel] = useState(0);
@@ -1349,8 +1803,8 @@ function ChatsView({
       ? selectedInstance
       : connectedInstances[0];
   const activeDraftKey =
-    chatInstance && (selectedContact?.remoteJid ?? selectedChat?.remoteJid)
-      ? `${chatInstance.id}:${selectedContact?.remoteJid ?? selectedChat?.remoteJid}`
+    chatInstance && (selectedContact?.remoteJid ?? selectedGroup?.remoteJid ?? selectedChat?.remoteJid)
+      ? `${chatInstance.id}:${selectedContact?.remoteJid ?? selectedGroup?.remoteJid ?? selectedChat?.remoteJid}`
       : null;
   const activeDraft = activeDraftKey ? (composerDrafts[activeDraftKey] ?? emptyComposerDraft) : emptyComposerDraft;
   const body = activeDraft.body;
@@ -1375,6 +1829,13 @@ function ChatsView({
 
   const setBody = (value: string) => updateDraft(activeDraftKey, { body: value });
   const setSelectedFile = (file: File | null) => updateDraft(activeDraftKey, { selectedFile: file });
+  const openFilePicker = (accept: string) => {
+    setAttachmentMenuOpen(false);
+    if (!fileInputRef.current) return;
+
+    fileInputRef.current.accept = accept;
+    fileInputRef.current.click();
+  };
   const clearDraft = (key: string | null) => {
     if (!key) return;
     setComposerDrafts(current => {
@@ -1386,7 +1847,39 @@ function ChatsView({
 
   useEffect(() => {
     setSelectedChat(null);
+    setSelectedContact(null);
+    setSelectedGroup(null);
+    setGroupActionsOpen(false);
+    setNewEntryMenuOpen(false);
+    setAttachmentMenuOpen(false);
   }, [chatInstance?.id]);
+
+  useEffect(() => {
+    const closeMenus = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest('[data-chat-popover-root]')) return;
+
+      setNewEntryMenuOpen(false);
+      setAttachmentMenuOpen(false);
+      setOpenChatMenuId(null);
+    };
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+
+      setNewEntryMenuOpen(false);
+      setAttachmentMenuOpen(false);
+      setOpenChatMenuId(null);
+    };
+
+    document.addEventListener('pointerdown', closeMenus);
+    document.addEventListener('keydown', closeOnEscape);
+
+    return () => {
+      document.removeEventListener('pointerdown', closeMenus);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
 
   useEffect(() => () => {
     if (selectedFilePreviewUrl) URL.revokeObjectURL(selectedFilePreviewUrl);
@@ -1551,6 +2044,12 @@ function ChatsView({
     enabled: Boolean(chatInstance?.id),
     refetchInterval: 3000,
   });
+  const groups = useQuery({
+    queryKey: ['groups', chatInstance?.id],
+    queryFn: () => apiClient.groups(chatInstance!.id),
+    enabled: Boolean(chatInstance?.id),
+    refetchInterval: 5000,
+  });
   const contacts = useQuery({
     queryKey: ['contacts', organizationId],
     queryFn: () => apiClient.contacts(organizationId),
@@ -1598,6 +2097,12 @@ function ChatsView({
     const matchingChat = chats.data.find(chat => chat.remoteJid === selectedContact.remoteJid);
     if (matchingChat) setSelectedChat(matchingChat);
   }, [chats.data, selectedChat, selectedContact]);
+  useEffect(() => {
+    if (!selectedGroup || selectedChat || !chats.data) return;
+
+    const matchingChat = chats.data.find(chat => chat.remoteJid === selectedGroup.remoteJid);
+    if (matchingChat) setSelectedChat(matchingChat);
+  }, [chats.data, selectedChat, selectedGroup]);
   const createContact = useMutation({
     mutationFn: () =>
       apiClient.createContact({
@@ -1613,12 +2118,13 @@ function ChatsView({
       setContactPhone('');
       setSelectedContact(contact);
       setSelectedChat(null);
+      setSelectedGroup(null);
       void queryClient.invalidateQueries({ queryKey: ['contacts', organizationId] });
     },
   });
   const send = useMutation({
     mutationFn: () => {
-      const recipient = selectedContact?.phoneE164 ?? selectedChat?.remoteJid;
+      const recipient = selectedContact?.phoneE164 ?? selectedGroup?.remoteJid ?? selectedChat?.remoteJid;
       if (!recipient) throw new Error('Selecione uma conversa para enviar');
 
       pendingSendDraftKeyRef.current = activeDraftKey;
@@ -1644,6 +2150,7 @@ function ChatsView({
       const refreshedChat =
         refreshedChats.find(chat => chat.id === message.chatId) ??
         refreshedChats.find(chat => chat.id === selectedChat?.id) ??
+        refreshedChats.find(chat => chat.remoteJid === selectedGroup?.remoteJid) ??
         refreshedChats.find(chat => chat.remoteJid === selectedContact?.remoteJid) ??
         refreshedChats.find(chat => chat.remoteJid === selectedChat?.remoteJid) ??
         refreshedChats.find(chat => chat.remoteJid.replace(/\D/g, '') === selectedContact?.phoneE164);
@@ -1665,6 +2172,51 @@ function ChatsView({
       pendingSendDraftKeyRef.current = null;
     },
   });
+  const chatOperation = useMutation({
+    mutationFn: ({ chatId, action, body }: { chatId: string; action: Parameters<typeof apiClient.chatOperation>[2]; body?: Record<string, unknown> }) =>
+      apiClient.chatOperation(chatInstance!.id, chatId, action, body),
+    onSuccess: () => {
+      setOpenChatMenuId(null);
+      void queryClient.invalidateQueries({ queryKey: ['chats', chatInstance?.id] });
+      if (selectedChat?.id) {
+        void queryClient.invalidateQueries({ queryKey: ['messages', chatInstance?.id, selectedChat.id] });
+      }
+    },
+  });
+  const syncGroups = useMutation({
+    mutationFn: () => apiClient.syncGroups(chatInstance!.id),
+    onSuccess: () => {
+      setNewEntryMenuOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ['groups', chatInstance?.id] });
+    },
+  });
+  const createGroup = useMutation({
+    mutationFn: () => apiClient.createGroup(chatInstance!.id, {
+      name: newGroupName,
+      participants: splitParticipants(newGroupParticipants),
+      autoInvite: newGroupAutoInvite,
+    }),
+    onSuccess: () => {
+      setNewGroupName('');
+      setNewGroupParticipants('');
+      setNewGroupAutoInvite(true);
+      setNewGroupOpen(false);
+      setNewEntryMenuOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ['groups', chatInstance?.id] });
+    },
+  });
+  const groupOperation = useMutation({
+    mutationFn: ({ group, action, body }: { group: WhatsAppGroup; action: Parameters<typeof apiClient.groupOperation>[2]; body?: Record<string, unknown> }) =>
+      apiClient.groupOperation(chatInstance!.id, group.id, action, body),
+    onSuccess: () => {
+      setOpenChatMenuId(null);
+      setGroupActionsOpen(false);
+      setGroupParticipantInput('');
+      setGroupMentionText('');
+      void queryClient.invalidateQueries({ queryKey: ['groups', chatInstance?.id] });
+      void queryClient.invalidateQueries({ queryKey: ['chats', chatInstance?.id] });
+    },
+  });
 
   if (!chatInstance) {
     return <EmptyState icon={MessageSquareText} title="Conecte uma instância para conversar" />;
@@ -1672,22 +2224,58 @@ function ChatsView({
 
   const contactList = contacts.data ?? [];
   const chatList = chats.data ?? [];
+  const groupList = groups.data ?? [];
   const normalizedSearch = contactSearch.trim().toLowerCase();
   const contactByRemoteJid = new Map(contactList.map(contact => [contact.remoteJid, contact]));
   const contactByPhone = new Map(contactList.map(contact => [contact.phoneE164, contact]));
-  const chatRows = [
-    ...chatList.map(chat => {
+  const groupByRemoteJid = new Map(groupList.map(group => [group.remoteJid, group]));
+  const chatByRemoteJid = new Map(chatList.map(chat => [chat.remoteJid, chat]));
+  type ChatInboxRow = {
+    id: string;
+    kind: 'private' | 'group' | 'contact';
+    contact: Contact | null;
+    chat: Chat | null;
+    group: WhatsAppGroup | null;
+    title: string;
+    subtitle: string;
+    preview: string;
+    time: string;
+    searchable: string;
+  };
+  const baseChatRows: ChatInboxRow[] = [
+    ...groupList.map(group => {
+      const chat = chatByRemoteJid.get(group.remoteJid) ?? null;
+      const lastMessage = chat?.messages?.[0];
+      const participantCount = group.size ?? group.participants?.length ?? 0;
+
+      return {
+        id: `group:${group.id}`,
+        kind: 'group' as const,
+        contact: null,
+        chat,
+        group,
+        title: group.subject,
+        subtitle: participantCount > 0 ? `${participantCount} participantes` : group.remoteJid,
+        preview: chatPreviewFromMessage(lastMessage),
+        time: formatRelativeChatTime(chat?.updatedAt ?? group.lastSyncedAt),
+        searchable: [group.subject, group.remoteJid, participantCount ? String(participantCount) : ''].filter(Boolean).join(' ').toLowerCase(),
+      };
+    }),
+    ...chatList.filter(chat => !chat.remoteJid.endsWith('@g.us') || !groupByRemoteJid.has(chat.remoteJid)).map(chat => {
       const chatPhone = chat.remoteJid.replace(/\D/g, '');
       const contact = contactByRemoteJid.get(chat.remoteJid) ?? contactByPhone.get(chatPhone) ?? null;
-      const title = contact?.name ?? chat.name ?? (chatPhone || chat.remoteJid);
+      const isGroupChat = chat.remoteJid.endsWith('@g.us');
+      const title = contact?.name ?? chat.name ?? (isGroupChat ? chat.remoteJid : (chatPhone || chat.remoteJid));
       const lastMessage = chat.messages?.[0];
 
       return {
         id: `chat:${chat.id}`,
+        kind: isGroupChat ? 'group' as const : 'private' as const,
         contact,
         chat,
+        group: null,
         title,
-        subtitle: contact?.phoneE164 ?? (chatPhone || chat.remoteJid),
+        subtitle: isGroupChat ? 'Grupo' : contact?.phoneE164 ?? (chatPhone || chat.remoteJid),
         preview: chatPreviewFromMessage(lastMessage),
         time: formatRelativeChatTime(chat.updatedAt),
         searchable: [title, contact?.phoneE164, chat.remoteJid, chatPhone].filter(Boolean).join(' ').toLowerCase(),
@@ -1697,17 +2285,38 @@ function ChatsView({
       .filter(contact => !chatList.some(chat => chat.remoteJid === contact.remoteJid || chat.remoteJid.replace(/\D/g, '') === contact.phoneE164))
       .map(contact => ({
         id: `contact:${contact.id}`,
+        kind: 'contact' as const,
         contact,
         chat: null,
+        group: null,
         title: contact.name,
         subtitle: contact.phoneE164,
         preview: 'Sem mensagens ainda',
         time: '',
         searchable: [contact.name, contact.phoneE164, contact.remoteJid].join(' ').toLowerCase(),
-      })),
-  ]
-    .filter(row => !normalizedSearch || row.searchable.includes(normalizedSearch))
+    })),
+  ];
+  const filterCounts = {
+    all: baseChatRows.length,
+    private: baseChatRows.filter(row => row.kind === 'private' || row.kind === 'contact').length,
+    groups: baseChatRows.filter(row => row.kind === 'group').length,
+    pinned: baseChatRows.filter(row => row.chat?.pinnedAt).length,
+    unread: baseChatRows.filter(row => !(row.chat?.isRead ?? true) || Boolean(row.chat?.unreadCount && row.chat.unreadCount > 0)).length,
+    archived: baseChatRows.filter(row => row.chat?.archivedAt).length,
+  };
+  const allChatRows = baseChatRows
+    .filter(row => {
+      if (chatFilter === 'private' && row.kind !== 'private' && row.kind !== 'contact') return false;
+      if (chatFilter === 'groups' && row.kind !== 'group') return false;
+      if (chatFilter === 'archived' && !row.chat?.archivedAt) return false;
+      if (chatFilter === 'pinned' && !row.chat?.pinnedAt) return false;
+      if (chatFilter === 'unread' && (row.chat?.isRead ?? true) && !(row.chat?.unreadCount && row.chat.unreadCount > 0)) return false;
+      if (!['all', 'private', 'groups'].includes(chatFilter) && !row.chat) return false;
+      return !normalizedSearch || row.searchable.includes(normalizedSearch);
+    })
     .sort((a, b) => {
+      if (a.chat?.pinnedAt && !b.chat?.pinnedAt) return -1;
+      if (!a.chat?.pinnedAt && b.chat?.pinnedAt) return 1;
       if (a.chat?.updatedAt && b.chat?.updatedAt) {
         return new Date(b.chat.updatedAt).getTime() - new Date(a.chat.updatedAt).getTime();
       }
@@ -1715,11 +2324,20 @@ function ChatsView({
       if (b.chat?.updatedAt) return 1;
       return a.title.localeCompare(b.title);
     });
-  const selectedChatPhone = selectedChat?.remoteJid.replace(/\D/g, '');
-  const selectedTitle = selectedContact?.name ?? selectedChat?.name ?? selectedChatPhone ?? 'Envio manual';
-  const selectedSubtitle = selectedContact?.phoneE164 ?? selectedChatPhone ?? 'Selecione uma conversa para enviar';
-  const selectedRecipient = selectedContact?.phoneE164 ?? selectedChat?.remoteJid;
-  const selectedChatCanBeSaved = Boolean(selectedChat && !selectedContact);
+  const chatRows = allChatRows;
+  const selectedIsGroup = Boolean(selectedGroup || selectedChat?.remoteJid.endsWith('@g.us'));
+  const selectedChatPhone = !selectedIsGroup ? selectedChat?.remoteJid.replace(/\D/g, '') : '';
+  const selectedGroupParticipants = selectedGroup?.size ?? selectedGroup?.participants?.length ?? 0;
+  const selectedTitle = selectedContact?.name ?? selectedGroup?.subject ?? selectedChat?.name ?? selectedChatPhone ?? '';
+  const selectedSubtitle = selectedGroup
+    ? selectedGroupParticipants > 0
+      ? `${selectedGroupParticipants} participantes`
+      : selectedGroup.remoteJid
+    : selectedIsGroup
+      ? selectedChat?.remoteJid ?? 'Grupo'
+      : selectedContact?.phoneE164 ?? selectedChatPhone ?? 'Selecione uma conversa para enviar';
+  const selectedRecipient = selectedContact?.phoneE164 ?? selectedGroup?.remoteJid ?? selectedChat?.remoteJid;
+  const selectedChatCanBeSaved = Boolean(selectedChat && !selectedContact && !selectedIsGroup);
   const openSaveSelectedChatContact = () => {
     if (!selectedChatPhone) return;
     const phoneParts = splitPhoneForContact(selectedChatPhone);
@@ -1729,24 +2347,63 @@ function ChatsView({
     setContactModalOpen(true);
   };
 
+  const isRecordingVisibleForActiveChat = isRecordingAudio && recordingDraftKeyRef.current === activeDraftKey;
+
   return (
-    <div className="grid h-[calc(100dvh-6rem)] min-h-0 grid-rows-[minmax(14rem,35%)_minmax(0,1fr)] gap-4 md:h-[calc(100dvh-7rem)] xl:grid-cols-[340px_minmax(0,1fr)] xl:grid-rows-none">
-      <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-[#2d3036] bg-[#181a21] shadow-[0_18px_60px_rgba(0,0,0,0.18)]">
-        <div className="space-y-4 border-b border-[#2d3036] p-4 sm:p-5">
+    <div className="chat-shell grid h-[calc(100dvh-5rem)] min-h-0 gap-0 overflow-hidden rounded-none border border-[#2d3036] bg-[#111318] md:h-[calc(100dvh-6rem)] xl:grid-cols-[370px_minmax(0,1fr)]">
+      <section className={`${selectedRecipient ? 'hidden xl:flex' : 'flex'} min-h-0 flex-col overflow-hidden border-r border-[#2d3036] bg-[#111318]`}>
+        <div className="space-y-3 border-b border-[#242832] bg-[#181a21] p-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h2 className="text-xl font-semibold">Chats</h2>
+              <h2 className="text-2xl font-semibold tracking-tight">Chat</h2>
               <p className="text-sm text-gray-400">{chatRows.length} conversas · {contactList.length} contatos</p>
             </div>
-            <Button
-              type="button"
-              variant="ghost"
-              className="h-9 w-9 rounded-full px-0"
-              onClick={() => setContactModalOpen(true)}
-              aria-label="Criar contato"
-            >
-              <Plus size={18} />
-            </Button>
+            <div className="relative" data-chat-popover-root>
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-11 w-11 rounded-full border-0 bg-[#2edb5c] px-0 text-[#05130a] hover:bg-[#25c653] hover:text-[#05130a]"
+                onClick={() => setNewEntryMenuOpen(open => !open)}
+                aria-label="Novo chat"
+              >
+                <Plus size={22} />
+              </Button>
+              {newEntryMenuOpen && (
+                <div className="absolute right-0 top-12 z-20 w-64 overflow-hidden rounded-2xl border border-[#2d3036] bg-[#202221] p-2 shadow-[0_18px_70px_rgba(0,0,0,0.45)]">
+                  <button
+                    type="button"
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-gray-300 transition hover:bg-[#1f2128] hover:text-white"
+                    onClick={() => {
+                      setNewEntryMenuOpen(false);
+                      setContactModalOpen(true);
+                    }}
+                  >
+                    <UserPlus size={15} />
+                    Novo contato
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-gray-300 transition hover:bg-[#1f2128] hover:text-white"
+                    onClick={() => {
+                      setNewEntryMenuOpen(false);
+                      setNewGroupOpen(true);
+                    }}
+                  >
+                    <Users size={15} />
+                    Novo grupo
+                  </button>
+                  <button
+                    type="button"
+                    className="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-gray-300 transition hover:bg-[#1f2128] hover:text-white"
+                    disabled={syncGroups.isPending}
+                    onClick={() => syncGroups.mutate()}
+                  >
+                    <RefreshCw size={15} className={syncGroups.isPending ? 'animate-spin' : ''} />
+                    Sincronizar grupos
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="space-y-2">
@@ -1758,6 +2415,8 @@ function ChatsView({
               value={chatInstance.id}
               onChange={event => {
                 setSelectedChat(null);
+                setSelectedContact(null);
+                setSelectedGroup(null);
                 setSelectedInstanceId(event.target.value);
               }}
             >
@@ -1774,48 +2433,168 @@ function ChatsView({
             <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
             <Input
               className="pl-9"
-              placeholder="Buscar chat..."
+              placeholder="Pesquisar ou começar uma nova conversa"
               value={contactSearch}
               onChange={event => setContactSearch(event.target.value)}
             />
           </div>
+
+          <div className="hide-scrollbar flex gap-2 overflow-x-auto pb-0.5 text-sm">
+            {[
+              ['all', 'Tudo'],
+              ['private', 'Pessoas'],
+              ['groups', 'Grupos'],
+              ['pinned', 'Fixadas'],
+              ['unread', 'Não lidas'],
+              ['archived', 'Arquivadas'],
+            ].map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={`flex h-9 shrink-0 cursor-pointer items-center gap-2 rounded-full border px-4 text-sm font-medium transition ${
+                  chatFilter === value
+                    ? 'border-[#2edb5c] bg-[#12351f] text-[#2edb5c]'
+                    : 'border-[#343840] bg-[#202329] text-gray-300 hover:bg-[#2a2e35]'
+                }`}
+                onClick={() => setChatFilter(value as typeof chatFilter)}
+              >
+                {label}
+                <span className="rounded-full bg-black/30 px-1.5 py-0.5 text-[11px] leading-none text-gray-300">
+                  {filterCounts[value as keyof typeof filterCounts]}
+                </span>
+              </button>
+            ))}
+          </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-auto">
-          {chatRows.map(({ id, contact, chat, title, preview, time }) => {
+        <div className="min-h-0 flex-1 overflow-auto bg-[#111318]">
+          {chatRows.map(({ id, kind, contact, chat, group, title, preview, time }) => {
             const isSelected =
               (chat && selectedChat?.id === chat.id) ||
-              (!chat && contact && selectedContact?.id === contact.id);
+              (group && selectedGroup?.id === group.id) ||
+              (!chat && !group && contact && selectedContact?.id === contact.id);
+            const isArchived = Boolean(chat?.archivedAt);
+            const isPinned = Boolean(chat?.pinnedAt);
+            const isMuted = chat?.mutedUntil ? new Date(chat.mutedUntil).getTime() > Date.now() : false;
+            const menuId = group ? `group:${group.id}` : chat ? `chat:${chat.id}` : null;
 
             return (
-            <button
-              key={id}
-              onClick={() => {
-                setSelectedContact(contact);
-                setSelectedChat(chat);
-              }}
-              className={`grid w-full cursor-pointer grid-cols-[40px_1fr_auto] gap-3 border-b border-[#2d3036] px-4 py-3 text-left transition ${
-                isSelected ? 'bg-[#23262e]' : 'hover:bg-[#1f2128]'
-              }`}
-            >
-              <span className="relative flex h-10 w-10 items-center justify-center rounded-full bg-[#2b3038] text-sm font-semibold text-gray-100">
-                {getInitials(title)}
-                {chat && (
-                  <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-[#181a21] bg-[#2edb5c]" />
+              <div key={id} className={`group relative transition ${isSelected ? 'bg-[#2a2d2b]' : 'hover:bg-[#202221]'}`}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedContact(contact);
+                    setSelectedGroup(group);
+                    setSelectedChat(chat);
+                    setOpenChatMenuId(null);
+                    setGroupActionsOpen(false);
+                  }}
+                  className="grid w-full cursor-pointer grid-cols-[48px_1fr_auto] gap-3 px-4 py-3 pr-12 text-left"
+                >
+                  <span className="relative flex h-12 w-12 items-center justify-center rounded-full bg-[#2f343b] text-sm font-semibold text-gray-100">
+                    {kind === 'group' ? <Users size={17} /> : getInitials(title)}
+                    {chat && (
+                      <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-[#111318] bg-[#2edb5c]" />
+                    )}
+                  </span>
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2">
+                      <strong className="min-w-0 flex-1 truncate text-[15px]">{title}</strong>
+                      {kind === 'group' && <Users className="shrink-0 text-gray-500" size={13} />}
+                      {isPinned && <Pin className="shrink-0 text-[#2edb5c]" size={13} />}
+                      {isArchived && <Archive className="shrink-0 text-gray-500" size={13} />}
+                    </span>
+                    <span className="mt-1 flex min-w-0 items-center gap-1.5 text-sm text-gray-400">
+                      {chat && <CheckCheck className="shrink-0 text-[#2edb5c]" size={14} />}
+                      <span className="truncate">{preview}</span>
+                    </span>
+                  </span>
+                  <span className="pt-0.5 text-xs text-gray-400">{time}</span>
+                </button>
+
+                {menuId && (
+                  <div className="absolute right-2 top-3" data-chat-popover-root>
+                    <button
+                      type="button"
+                      className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-gray-500 opacity-100 transition hover:bg-[#2b3038] hover:text-white sm:opacity-0 sm:group-hover:opacity-100"
+                      onClick={event => {
+                        event.stopPropagation();
+                        setOpenChatMenuId(current => (current === menuId ? null : menuId));
+                      }}
+                      aria-label="Ações do chat"
+                    >
+                      <MoreVertical size={16} />
+                    </button>
+
+                    {openChatMenuId === menuId && (
+                      <div className="absolute right-0 top-9 z-20 w-60 overflow-hidden rounded-2xl border border-[#2d3036] bg-[#202221] p-2 shadow-[0_18px_70px_rgba(0,0,0,0.45)]">
+                        {group ? (
+                          <>
+                            {[
+                              { label: 'Ver participantes', icon: Users, onClick: () => setGroupActionsOpen(true) },
+                              { label: 'Sincronizar grupos', icon: RefreshCw, onClick: () => syncGroups.mutate() },
+                              { label: 'Sair do grupo', icon: DoorOpen, danger: true, onClick: () => groupOperation.mutate({ group, action: 'leave' }) },
+                            ].map(item => (
+                              <button
+                                key={item.label}
+                                type="button"
+                                className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition ${
+                                  item.danger
+                                    ? 'text-red-300 hover:bg-red-500/10 hover:text-red-200'
+                                    : 'text-gray-300 hover:bg-[#1f2128] hover:text-white'
+                                }`}
+                                disabled={syncGroups.isPending || groupOperation.isPending}
+                                onClick={event => {
+                                  event.stopPropagation();
+                                  setSelectedContact(null);
+                                  setSelectedGroup(group);
+                                  setSelectedChat(chat);
+                                  item.onClick();
+                                  setOpenChatMenuId(null);
+                                }}
+                              >
+                                <item.icon size={15} />
+                                {item.label}
+                              </button>
+                            ))}
+                          </>
+                        ) : chat ? [
+                          { label: 'Marcar como lido', icon: CheckCheck, action: 'read' as const, body: { read: true } },
+                          { label: isArchived ? 'Desarquivar' : 'Arquivar', icon: Archive, action: 'archive' as const, body: { archived: !isArchived } },
+                          { label: isPinned ? 'Desafixar' : 'Fixar', icon: Pin, action: 'pin' as const, body: { pinned: !isPinned } },
+                          {
+                            label: isMuted ? 'Remover silêncio' : 'Mutar por 8h',
+                            icon: VolumeX,
+                            action: 'mute' as const,
+                            body: { mutedUntil: isMuted ? null : new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString() },
+                          },
+                          { label: 'Limpar conversa', icon: Eraser, action: 'clear' as const, body: {} },
+                          { label: 'Excluir conversa', icon: Trash2, action: 'delete' as const, body: {}, danger: true },
+                        ].map(item => (
+                          <button
+                            key={item.label}
+                            type="button"
+                            className={`flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm transition ${
+                              item.danger
+                                ? 'text-red-300 hover:bg-red-500/10 hover:text-red-200'
+                                : 'text-gray-300 hover:bg-[#1f2128] hover:text-white'
+                            }`}
+                            disabled={chatOperation.isPending}
+                            onClick={event => {
+                              event.stopPropagation();
+                              chatOperation.mutate({ chatId: chat.id, action: item.action, body: item.body });
+                            }}
+                          >
+                            <item.icon size={15} />
+                            {item.label}
+                          </button>
+                        )) : null}
+                      </div>
+                    )}
+                  </div>
                 )}
-              </span>
-              <span className="min-w-0">
-                <span className="flex items-center gap-2">
-                  <strong className="min-w-0 flex-1 truncate text-sm">{title}</strong>
-                </span>
-                <span className="mt-1 flex min-w-0 items-center gap-1.5 text-sm text-gray-400">
-                  {chat && <CheckCheck className="shrink-0 text-[#2edb5c]" size={14} />}
-                  <span className="truncate">{preview}</span>
-                </span>
-              </span>
-              <span className="pt-0.5 text-xs text-gray-500">{time}</span>
-            </button>
-          );
+              </div>
+            );
           })}
 
           {chatRows.length === 0 && (
@@ -1826,11 +2605,11 @@ function ChatsView({
         </div>
       </section>
 
-      <section className="flex min-h-0 overflow-hidden rounded-xl border border-[#2d3036] bg-[#181a21] shadow-[0_18px_60px_rgba(0,0,0,0.18)]">
+      <section className={`${selectedRecipient ? 'flex' : 'hidden xl:flex'} min-h-0 overflow-hidden bg-[#0b0f0f]`}>
         {!selectedRecipient ? (
-          <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center">
+          <div className="chat-wallpaper flex min-h-0 flex-1 items-center justify-center p-6 text-center">
             <div className="max-w-sm">
-              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-[#23262e] text-gray-400">
+              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#202221] text-gray-400">
                 <MessageSquareText size={22} />
               </div>
               <h2 className="mt-4 text-lg font-semibold text-white">Selecione uma conversa</h2>
@@ -1841,11 +2620,25 @@ function ChatsView({
           </div>
         ) : (
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="border-b border-[#2d3036] px-4 py-4 sm:px-5">
+          <div className="border-b border-[#2d3036] bg-[#181a21] px-3 py-3 sm:px-5">
             <div className="flex min-w-0 items-center justify-between gap-3">
               <div className="flex min-w-0 items-center gap-3">
-                <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#2b3038] text-sm font-semibold text-gray-100">
-                  {getInitials(selectedTitle)}
+                <button
+                  type="button"
+                  className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full text-gray-300 transition hover:bg-[#252930] xl:hidden"
+                  onClick={() => {
+                    setSelectedChat(null);
+                    setSelectedContact(null);
+                    setSelectedGroup(null);
+                    setGroupActionsOpen(false);
+                    setOpenChatMenuId(null);
+                  }}
+                  aria-label="Voltar para lista de chats"
+                >
+                  <ArrowLeft size={19} />
+                </button>
+                <span className="relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-[#2f343b] text-sm font-semibold text-gray-100">
+                  {selectedIsGroup ? <Users size={18} /> : getInitials(selectedTitle)}
                   <span className="absolute bottom-0 right-0 h-2.5 w-2.5 rounded-full border-2 border-[#181a21] bg-[#2edb5c]" />
                 </span>
                 <div className="min-w-0">
@@ -1853,16 +2646,24 @@ function ChatsView({
                   <p className="truncate text-sm text-gray-400">{selectedSubtitle}</p>
                 </div>
               </div>
-              {selectedChatCanBeSaved && (
-                <Button type="button" variant="ghost" className="shrink-0" onClick={openSaveSelectedChatContact}>
-                  <UserPlus size={16} />
-                  <span className="hidden sm:inline">Salvar contato</span>
-                </Button>
-              )}
+              <div className="flex shrink-0 items-center gap-2">
+                {selectedGroup && (
+                  <Button type="button" variant="ghost" className="shrink-0" onClick={() => setGroupActionsOpen(true)}>
+                    <Users size={16} />
+                    <span className="hidden sm:inline">Grupo</span>
+                  </Button>
+                )}
+                {selectedChatCanBeSaved && (
+                  <Button type="button" variant="ghost" className="shrink-0" onClick={openSaveSelectedChatContact}>
+                    <UserPlus size={16} />
+                    <span className="hidden sm:inline">Salvar contato</span>
+                  </Button>
+                )}
+              </div>
             </div>
           </div>
 
-          <div ref={messagesScrollRef} className="min-h-0 flex-1 overflow-auto bg-[#15171d] p-3 sm:p-5">
+          <div ref={messagesScrollRef} className="chat-wallpaper min-h-0 flex-1 overflow-auto p-3 sm:p-5">
             {(messages.data ?? []).length === 0 ? (
               <div className="flex h-full items-center justify-center text-center text-sm text-gray-500">
                 {selectedRecipient ? 'Nenhuma mensagem nesta conversa ainda.' : 'Selecione uma conversa para começar.'}
@@ -1872,7 +2673,7 @@ function ChatsView({
                 {(messages.data ?? []).map(message => (
                   <div key={message.id} className={`flex ${message.fromMe ? 'justify-end' : 'justify-start'}`}>
                     <div
-                      className="max-w-[86%] rounded-2xl bg-[#23262e] px-3.5 py-2 text-sm text-gray-100 shadow-sm data-[has-image=true]:p-1.5 data-[from-me=true]:bg-[#12351f] sm:max-w-[78%]"
+                      className="max-w-[86%] rounded-2xl bg-[#20252b] px-3.5 py-2 text-sm text-gray-100 shadow-sm data-[has-image=true]:p-1.5 data-[from-me=true]:bg-[#0f3d22] sm:max-w-[74%]"
                       data-from-me={message.fromMe}
                       data-has-image={Boolean(message.mediaUrl && message.type === 'IMAGE')}
                     >
@@ -1927,7 +2728,7 @@ function ChatsView({
                               />
                             )}
                             {message.mediaUrl && message.type === 'AUDIO' && (
-                              <audio controls src={absoluteApiUrl(message.mediaUrl)} className="h-10 w-72 max-w-full" />
+                              <audio controls src={absoluteApiUrl(message.mediaUrl)} className="ravox-audio h-10 w-72 max-w-full" />
                             )}
                             {message.mediaUrl && !['IMAGE', 'VIDEO', 'AUDIO'].includes(message.type ?? '') && (
                               <a
@@ -1945,13 +2746,20 @@ function ChatsView({
                                 </span>
                               </a>
                             )}
-                            {message.body && (!message.mediaUrl || ['VIDEO', 'AUDIO'].includes(message.type ?? '')) ? (
-                              <p className="min-w-0 break-words leading-relaxed">{message.body}</p>
-                            ) : (
-                              !message.mediaUrl && (
-                                <p className="min-w-0 text-gray-400">{message.type ? `${mediaKindLabel(message.type)} recebido` : 'Mensagem recebida'}</p>
-                              )
+                            {shouldShowMediaDownloadWarning(message) && (
+                              <span
+                                className="inline-flex items-center gap-2 rounded-full bg-[#111318] px-3 py-2 text-gray-400"
+                                title={message.failureReason ?? undefined}
+                              >
+                                <CircleAlert size={14} className="text-amber-300" />
+                                {mediaDownloadMissingLabel(message.type)}
+                              </span>
                             )}
+                            {message.body ? (
+                              <p className="min-w-0 break-words leading-relaxed">{message.body}</p>
+                            ) : !message.mediaUrl && !shouldShowMediaDownloadWarning(message) ? (
+                              <p className="min-w-0 text-gray-400">{message.type ? `${mediaKindLabel(message.type)} recebido` : 'Mensagem recebida'}</p>
+                            ) : null}
                           </div>
                           <span className="flex shrink-0 items-center gap-1 text-[11px] leading-none text-gray-400">
                             {formatMessageTime(message.createdAt)}
@@ -1996,52 +2804,43 @@ function ChatsView({
                           )}
 
           <form
-            className="border-t border-[#2d3036] bg-[#181a21] p-3 sm:p-4"
+            className="border-t border-[#2d3036] bg-[#181a21] p-2 sm:p-3"
             onSubmit={event => {
               event.preventDefault();
               send.mutate();
             }}
           >
-            {selectedFile && (
+            {!isRecordingVisibleForActiveChat && selectedFile && (
               <div
-                className={`mb-2 flex min-w-0 items-center justify-between gap-2 border text-sm ${
-                  selectedFileKind === 'AUDIO'
-                    ? 'rounded-full border-[#2d3036] bg-[#111318] px-2 py-1.5'
-                    : 'rounded-lg border-[#2d3036] bg-[#111318] p-2'
+                className={`mb-2 flex min-w-0 items-center gap-3 rounded-2xl border border-[#2d3036] bg-[#202221] p-2 text-sm text-gray-300 ${
+                  selectedFileKind === 'AUDIO' ? 'rounded-full px-2' : ''
                 }`}
               >
-                <div className="flex min-w-0 flex-1 items-center gap-3 text-gray-300">
-                  {selectedFileKind === 'AUDIO' && selectedFilePreviewUrl ? (
-                    <>
-                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#2edb5c] text-[#07110b]">
-                        <Mic size={18} />
-                      </span>
-                      <audio controls src={selectedFilePreviewUrl} className="h-9 min-w-0 flex-1" />
-                    </>
-                  ) : selectedFileKind === 'IMAGE' && selectedFilePreviewUrl ? (
-                    <img src={selectedFilePreviewUrl} alt={selectedFile.name} className="h-12 w-12 rounded-md object-cover" />
-                  ) : selectedFileKind === 'VIDEO' && selectedFilePreviewUrl ? (
-                    <video src={selectedFilePreviewUrl} className="h-12 w-16 rounded-md bg-black object-cover" muted />
-                  ) : (
-                    <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-[#23262e] text-[#2edb5c]">
-                      <FileText size={20} />
+                {selectedFileKind === 'AUDIO' && selectedFilePreviewUrl ? (
+                  <>
+                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-[#2edb5c] text-[#07110b]">
+                      <Mic size={18} />
                     </span>
-                  )}
-                  {selectedFileKind !== 'AUDIO' && (
-                    <div className="min-w-0 flex-1">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <span className="truncate font-medium text-gray-100">{selectedFile.name}</span>
-                        <span className="shrink-0 text-xs text-gray-500">{mediaKindLabel(selectedFileKind ?? undefined)}</span>
-                      </div>
-                      <span className="block truncate text-xs text-gray-500">{selectedFile.name}</span>
-                    </div>
-                  )}
-                </div>
+                    <audio controls src={selectedFilePreviewUrl} className="ravox-audio h-10 min-w-0 flex-1" />
+                  </>
+                ) : selectedFileKind === 'IMAGE' && selectedFilePreviewUrl ? (
+                  <img src={selectedFilePreviewUrl} alt={selectedFile.name} className="h-14 w-14 shrink-0 rounded-lg object-cover" />
+                ) : selectedFileKind === 'VIDEO' && selectedFilePreviewUrl ? (
+                  <video src={selectedFilePreviewUrl} className="h-14 w-20 shrink-0 rounded-lg bg-black object-cover" muted />
+                ) : (
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-[#111318] text-[#2edb5c]">
+                    <FileText size={20} />
+                  </span>
+                )}
+                {selectedFileKind !== 'AUDIO' && (
+                  <div className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-gray-100">{selectedFile.name}</span>
+                    <span className="block truncate text-xs text-gray-500">{mediaKindLabel(selectedFileKind ?? undefined)}</span>
+                  </div>
+                )}
                 <button
                   type="button"
-                  className={`shrink-0 cursor-pointer text-gray-500 transition hover:text-white ${
-                    selectedFileKind === 'AUDIO' ? 'mr-2 flex h-8 w-8 items-center justify-center rounded-full hover:bg-[#23262e]' : ''
-                  }`}
+                  className="ml-auto flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full text-gray-500 transition hover:bg-[#2b3038] hover:text-white"
                   onClick={() => {
                     setSelectedFile(null);
                     setRecordingError('');
@@ -2053,40 +2852,58 @@ function ChatsView({
                 </button>
               </div>
             )}
-            {isRecordingAudio && (
-              <div className="mb-2 rounded-full border border-[#25563a] bg-[#0d2417] px-2 py-2 text-sm text-gray-100 sm:px-3">
-                <div className="flex min-w-0 items-center gap-2 sm:gap-3">
-                  <button
-                    type="button"
-                    className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full text-red-300 transition hover:bg-red-500/15 hover:text-red-100"
-                    onClick={cancelRecordingAudio}
-                    aria-label="Cancelar áudio"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                  <span className="min-w-11 text-sm font-semibold tabular-nums text-red-100">
-                    {formatDuration(recordingSeconds)}
-                  </span>
-                  <div className="flex h-10 min-w-0 flex-1 items-center gap-0.5 overflow-hidden rounded-full bg-[#111318] px-3">
-                    {Array.from({ length: 72 }).map((_, index) => {
-                      const wave = Math.sin(index * 0.72) * 0.5 + 0.5;
-                      const liveLevel = Math.max(0.1, recordingLevel);
-                      const barStrength = 0.18 + liveLevel * (0.35 + wave * 0.65);
+            {isRecordingVisibleForActiveChat && (
+              <div className="mb-2 flex min-w-0 items-center gap-3 rounded-full bg-[#202221] px-3 py-2 text-sm text-gray-100">
+                <button
+                  type="button"
+                  className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full text-red-300 transition hover:bg-red-500/15 hover:text-red-100"
+                  onClick={cancelRecordingAudio}
+                  aria-label="Cancelar áudio"
+                >
+                  <Trash2 size={18} />
+                </button>
+                <span className="flex min-w-14 items-center gap-2 font-semibold tabular-nums text-white">
+                  <span className="h-2.5 w-2.5 rounded-full bg-red-400 shadow-[0_0_0_5px_rgba(248,113,113,0.12)]" />
+                  {formatDuration(recordingSeconds)}
+                </span>
+                <div
+                  className="grid h-9 min-w-0 flex-1 items-center gap-1 overflow-hidden rounded-full bg-[#161918] px-3"
+                  style={{ gridTemplateColumns: 'repeat(96, minmax(2px, 1fr))' }}
+                  aria-hidden="true"
+                >
+                  {Array.from({ length: 96 }).map((_, index) => {
+                    const wave = Math.sin(index * 0.66) * 0.5 + 0.5;
+                    const liveLevel = Math.max(0.08, recordingLevel);
+                    const barStrength = 0.18 + liveLevel * (0.35 + wave * 0.65);
 
-                      return (
-                        <span
-                          key={index}
-                          className="w-0.5 flex-1 rounded-full bg-[#2edb5c] transition-[height,opacity] duration-75"
-                          style={{
-                            maxWidth: 4,
-                            height: `${4 + barStrength * 26}px`,
-                            opacity: 0.45 + Math.min(1, barStrength) * 0.55,
-                          }}
-                        />
-                      );
-                    })}
-                  </div>
+                    return (
+                      <span
+                        key={index}
+                        className="mx-auto w-full max-w-1 rounded-full bg-[#2edb5c] transition-[height,opacity] duration-75"
+                        style={{
+                          height: `${5 + barStrength * 25}px`,
+                          opacity: 0.35 + Math.min(1, barStrength) * 0.65,
+                        }}
+                      />
+                    );
+                  })}
                 </div>
+                <button
+                  type="button"
+                  className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border border-red-500/45 text-red-200 transition hover:bg-red-500/15"
+                  onClick={stopRecordingAudio}
+                  aria-label="Parar gravação"
+                >
+                  <Square size={14} />
+                </button>
+                <button
+                  type="button"
+                  className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-[#2edb5c] text-[#061208] transition hover:bg-[#25c653]"
+                  onClick={stopRecordingAudio}
+                  aria-label="Concluir áudio"
+                >
+                  <Send size={19} />
+                </button>
               </div>
             )}
             {recordingError && (
@@ -2094,68 +2911,386 @@ function ChatsView({
                 {recordingError}
               </div>
             )}
-            <div className="grid gap-2 sm:grid-cols-[auto_1fr_auto_auto]">
-              <input
-                ref={fileInputRef}
-                type="file"
-                className="hidden"
-                accept="image/*,audio/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip"
-                onChange={event => {
-                  setRecordingError('');
-                  setSelectedFile(event.target.files?.[0] ?? null);
-                }}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                className="w-full px-3 sm:w-auto"
-                disabled={!selectedRecipient || send.isPending || isRecordingAudio}
-                onClick={() => fileInputRef.current?.click()}
-                aria-label="Anexar arquivo"
-              >
-                <Paperclip size={18} />
-              </Button>
-              <Input
-                placeholder={
-                  selectedFile
-                    ? 'Legenda opcional'
-                    : isRecordingAudio
-                      ? 'Gravando áudio...'
-                    : selectedContact
-                      ? `Mensagem para ${selectedContact.name}`
-                      : selectedChat
-                        ? `Mensagem para ${selectedTitle}`
-                        : 'Selecione uma conversa para enviar'
-                }
-                value={body}
-                onChange={event => setBody(event.target.value)}
-                disabled={!selectedRecipient || isRecordingAudio}
-              />
-              <Button
-                type="button"
-                variant="ghost"
-                className={`w-full px-3 sm:w-auto ${isRecordingAudio ? 'border-red-500/40 bg-red-500/10 text-red-100 hover:bg-red-500/15' : ''}`}
-                disabled={!selectedRecipient || send.isPending}
-                onClick={() => {
-                  if (isRecordingAudio) stopRecordingAudio();
-                  else void startRecordingAudio();
-                }}
-                aria-label={isRecordingAudio ? 'Parar gravação' : 'Gravar áudio'}
-              >
-                {isRecordingAudio ? <Square size={16} /> : <Mic size={18} />}
-              </Button>
-              <Button
-                className="w-full shrink-0 sm:w-auto"
-                disabled={!selectedRecipient || isRecordingAudio || (!body.trim() && !selectedFile) || send.isPending}
-              >
-                <Send size={18} />
-                Enviar
-              </Button>
-            </div>
+            {!isRecordingVisibleForActiveChat && (
+              <div className="flex items-center gap-2 rounded-full bg-[#202221] p-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  onChange={event => {
+                    setRecordingError('');
+                    setSelectedFile(event.target.files?.[0] ?? null);
+                  }}
+                />
+                <div className="relative" data-chat-popover-root>
+                  <button
+                    type="button"
+                    className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full text-gray-200 transition hover:bg-[#2f343b]"
+                    disabled={!selectedRecipient || send.isPending}
+                    onClick={() => setAttachmentMenuOpen(open => !open)}
+                    aria-label="Abrir anexos"
+                  >
+                    <Plus size={24} />
+                  </button>
+                  {attachmentMenuOpen && (
+                    <div className="absolute bottom-12 left-0 z-20 w-64 overflow-hidden rounded-2xl border border-[#2d3036] bg-[#202221] p-2 shadow-[0_18px_70px_rgba(0,0,0,0.45)]">
+                      {[
+                        { label: 'Documento', icon: FileText, accept: '.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip' },
+                        { label: 'Fotos e vídeos', icon: Paperclip, accept: 'image/*,video/*' },
+                        { label: 'Áudio', icon: Mic, accept: 'audio/*' },
+                      ].map(item => (
+                        <button
+                          key={item.label}
+                          type="button"
+                          className="flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-gray-200 transition hover:bg-[#2b3038]"
+                          onClick={() => openFilePicker(item.accept)}
+                        >
+                          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#111318] text-[#2edb5c]">
+                            <item.icon size={16} />
+                          </span>
+                          {item.label}
+                        </button>
+                      ))}
+                      <div className="my-1 border-t border-[#2d3036]" />
+                      <button
+                        type="button"
+                        className="flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-gray-200 transition hover:bg-[#2b3038]"
+                        onClick={() => {
+                          setAttachmentMenuOpen(false);
+                          setContactModalOpen(true);
+                        }}
+                      >
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#111318] text-[#2edb5c]">
+                          <UserPlus size={16} />
+                        </span>
+                        Novo contato
+                      </button>
+                      <button
+                        type="button"
+                        className="flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-left text-sm font-medium text-gray-200 transition hover:bg-[#2b3038]"
+                        onClick={() => {
+                          setAttachmentMenuOpen(false);
+                          setNewGroupOpen(true);
+                        }}
+                      >
+                        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#111318] text-[#2edb5c]">
+                          <Users size={16} />
+                        </span>
+                        Novo grupo
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="hidden h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full text-gray-300 transition hover:bg-[#2f343b] sm:flex"
+                  disabled={!selectedRecipient || send.isPending}
+                  aria-label="Emoji"
+                >
+                  <Smile size={21} />
+                </button>
+                <input
+                  className="min-w-0 flex-1 border-0 bg-transparent px-1 text-sm text-gray-100 outline-none placeholder:text-gray-500"
+                  placeholder={selectedFile ? 'Legenda opcional' : 'Digite uma mensagem'}
+                  value={body}
+                  onChange={event => setBody(event.target.value)}
+                  disabled={!selectedRecipient}
+                />
+                {body.trim() || selectedFile ? (
+                  <button
+                    type="submit"
+                    className="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-full bg-[#2edb5c] text-[#061208] transition hover:bg-[#25c653] disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!selectedRecipient || (!body.trim() && !selectedFile) || send.isPending}
+                    aria-label="Enviar"
+                  >
+                    <Send size={20} />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="flex h-10 w-10 shrink-0 cursor-pointer items-center justify-center rounded-full text-gray-200 transition hover:bg-[#2f343b] disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={!selectedRecipient || send.isPending}
+                    onClick={() => void startRecordingAudio()}
+                    aria-label="Gravar áudio"
+                  >
+                    <Mic size={20} />
+                  </button>
+                )}
+              </div>
+            )}
           </form>
         </div>
         )}
       </section>
+
+      {newGroupOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <form
+            className="w-full max-w-lg rounded-lg border border-[#2d3036] bg-[#181a21] shadow-[0_24px_90px_rgba(0,0,0,0.55)]"
+            onSubmit={event => {
+              event.preventDefault();
+              createGroup.mutate();
+            }}
+          >
+            <div className="flex items-center justify-between border-b border-[#2d3036] p-4">
+              <div>
+                <h2 className="text-lg font-semibold">Novo grupo</h2>
+                <p className="text-sm text-gray-400">A criação roda pelo worker e aparece no Chat depois da sincronização.</p>
+              </div>
+              <button
+                type="button"
+                className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-gray-400 transition hover:bg-[#23262e] hover:text-white"
+                onClick={() => setNewGroupOpen(false)}
+                aria-label="Fechar modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="grid gap-3 p-4">
+              <Input
+                placeholder="Nome do grupo"
+                value={newGroupName}
+                onChange={event => setNewGroupName(event.target.value)}
+              />
+              <textarea
+                className="min-h-28 rounded-md border border-[#2d3036] bg-[#111318] p-3 text-sm text-gray-100 outline-none transition placeholder:text-gray-600 hover:border-gray-600 focus:border-[#2edb5c]"
+                placeholder="Participantes separados por vírgula ou linha"
+                value={newGroupParticipants}
+                onChange={event => setNewGroupParticipants(event.target.value)}
+              />
+              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-[#2d3036] bg-[#111318] p-3 text-sm text-gray-300">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 accent-[#2edb5c]"
+                  checked={newGroupAutoInvite}
+                  onChange={event => setNewGroupAutoInvite(event.target.checked)}
+                />
+                <span>
+                  <span className="block font-medium text-gray-100">Enviar convite automaticamente</span>
+                  <span className="mt-1 block text-gray-500">Números que não entrarem direto recebem o link do grupo no privado.</span>
+                </span>
+              </label>
+            </div>
+            <div className="grid gap-2 border-t border-[#2d3036] p-4 sm:flex sm:justify-end">
+              <Button type="button" variant="ghost" className="w-full sm:w-auto" onClick={() => setNewGroupOpen(false)}>
+                Cancelar
+              </Button>
+              <Button
+                type="submit"
+                className="w-full sm:w-auto"
+                disabled={!newGroupName.trim() || splitParticipants(newGroupParticipants).length === 0 || createGroup.isPending}
+              >
+                <Users size={16} />
+                Criar grupo
+              </Button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {groupActionsOpen && selectedGroup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="flex max-h-[90dvh] w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-[#2d3036] bg-[#181a21] shadow-[0_24px_90px_rgba(0,0,0,0.55)]">
+            <div className="flex items-center justify-between gap-3 border-b border-[#2d3036] p-4">
+              <div className="min-w-0">
+                <h2 className="truncate text-lg font-semibold">{selectedGroup.subject}</h2>
+                <p className="truncate text-sm text-gray-400">
+                  {selectedGroupParticipants > 0 ? `${selectedGroupParticipants} participantes` : selectedGroup.remoteJid}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-gray-400 transition hover:bg-[#23262e] hover:text-white"
+                onClick={() => setGroupActionsOpen(false)}
+                aria-label="Fechar ações do grupo"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="min-h-0 overflow-y-auto p-4">
+              <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
+                <section className="rounded-lg border border-[#2d3036] bg-[#111318] p-4">
+                  <h3 className="font-semibold">Participantes</h3>
+                  <p className="mt-1 text-sm text-gray-400">Use telefones com ou sem +55, separados por vírgula ou linha.</p>
+                  <textarea
+                    className="mt-4 min-h-24 w-full rounded-md border border-[#2d3036] bg-[#0d0f14] p-3 text-sm text-gray-100 outline-none transition placeholder:text-gray-600 hover:border-gray-600 focus:border-[#2edb5c]"
+                    placeholder="5585999999999, +5585888888888"
+                    value={groupParticipantInput}
+                    onChange={event => setGroupParticipantInput(event.target.value)}
+                  />
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={!groupParticipantInput.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({
+                        group: selectedGroup,
+                        action: 'participants/add',
+                        body: { participants: splitParticipants(groupParticipantInput), autoInvite: true },
+                      })}
+                    >
+                      <UserPlus size={16} />
+                      Adicionar
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      disabled={!groupParticipantInput.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({
+                        group: selectedGroup,
+                        action: 'participants/remove',
+                        body: { participants: splitParticipants(groupParticipantInput) },
+                      })}
+                    >
+                      <Trash2 size={16} />
+                      Remover
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={!groupParticipantInput.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({
+                        group: selectedGroup,
+                        action: 'admins/promote',
+                        body: { participants: splitParticipants(groupParticipantInput) },
+                      })}
+                    >
+                      <Crown size={16} />
+                      Promover admin
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={!groupParticipantInput.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({
+                        group: selectedGroup,
+                        action: 'admins/demote',
+                        body: { participants: splitParticipants(groupParticipantInput) },
+                      })}
+                    >
+                      Remover admin
+                    </Button>
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-[#2d3036] bg-[#111318] p-4">
+                  <h3 className="font-semibold">Mensagens com menção</h3>
+                  <p className="mt-1 text-sm text-gray-400">Envie para participantes específicos ou mencione todos.</p>
+                  <Input
+                    className="mt-4"
+                    placeholder="Mensagem para o grupo"
+                    value={groupMentionText}
+                    onChange={event => setGroupMentionText(event.target.value)}
+                  />
+                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={!groupMentionText.trim() || !groupParticipantInput.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({
+                        group: selectedGroup,
+                        action: 'mention',
+                        body: {
+                          text: groupMentionText,
+                          participants: splitParticipants(groupParticipantInput),
+                        },
+                      })}
+                    >
+                      Mencionar pessoas
+                    </Button>
+                    <Button
+                      type="button"
+                      disabled={!groupMentionText.trim() || groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({
+                        group: selectedGroup,
+                        action: 'mention-all',
+                        body: { text: groupMentionText },
+                      })}
+                    >
+                      Mencionar todos
+                    </Button>
+                  </div>
+
+                  <div className="mt-5 grid gap-2 border-t border-[#2d3036] pt-4 sm:grid-cols-2">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ group: selectedGroup, action: 'metadata/sync' })}
+                    >
+                      Metadata
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ group: selectedGroup, action: 'requests/list' })}
+                    >
+                      Solicitações
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({
+                        group: selectedGroup,
+                        action: 'settings',
+                        body: { messages: selectedGroup.announce ? 'all' : 'admins' },
+                      })}
+                    >
+                      {selectedGroup.announce ? 'Liberar mensagens' : 'Só admins'}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      disabled={syncGroups.isPending}
+                      onClick={() => syncGroups.mutate()}
+                    >
+                      <RefreshCw size={16} className={syncGroups.isPending ? 'animate-spin' : ''} />
+                      Sincronizar grupos
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="danger"
+                      disabled={groupOperation.isPending}
+                      onClick={() => groupOperation.mutate({ group: selectedGroup, action: 'leave' })}
+                    >
+                      <DoorOpen size={16} />
+                      Sair do grupo
+                    </Button>
+                  </div>
+                </section>
+              </div>
+
+              <section className="mt-4 rounded-lg border border-[#2d3036] bg-[#111318]">
+                <div className="border-b border-[#2d3036] p-4">
+                  <h3 className="font-semibold">Membros sincronizados</h3>
+                  <p className="text-sm text-gray-400">Use “Sincronizar grupos” se esta lista estiver desatualizada.</p>
+                </div>
+                <div className="max-h-72 overflow-y-auto">
+                  {(selectedGroup.participants ?? []).map(participant => (
+                    <div key={participant.id} className="flex items-center justify-between gap-3 border-b border-[#2d3036] p-4 last:border-b-0">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{participant.name || participant.jid}</p>
+                        <p className="truncate text-sm text-gray-500">{participant.jid}</p>
+                      </div>
+                      {participant.isAdmin && (
+                        <span className="rounded-full border border-[#2d3036] px-2 py-1 text-xs text-[#2edb5c]">
+                          {participant.isSuperAdmin ? 'super admin' : 'admin'}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                  {(!selectedGroup.participants || selectedGroup.participants.length === 0) && (
+                    <div className="p-6 text-sm text-gray-500">Nenhum participante carregado no cache.</div>
+                  )}
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      )}
 
       {contactModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -2970,6 +4105,10 @@ function MethodBadge({ method }: { method: string }) {
       ? 'bg-emerald-500/15 text-emerald-300'
       : method === 'POST'
         ? 'bg-blue-500/15 text-blue-300'
+        : method === 'PATCH'
+          ? 'bg-amber-500/15 text-amber-300'
+          : method === 'DELETE'
+            ? 'bg-red-500/15 text-red-300'
         : 'bg-gray-500/15 text-gray-300';
 
   return (
@@ -2982,7 +4121,7 @@ function MethodBadge({ method }: { method: string }) {
 type DocsEndpoint = {
   id: string;
   group: string;
-  method: 'GET' | 'POST';
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   title: string;
   path: string;
   description: string;
@@ -2995,13 +4134,56 @@ type DocsEndpoint = {
 function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance }) {
   const exampleInstanceId = selectedInstance?.id ?? 'instancia_id';
   const exampleChatId = 'chat_123';
+  const exampleGroupId = '120363000000000000@g.us';
+  const examplePhone = '5585999999999';
+  const exampleCommunityId = '120363111111111111@g.us';
+  const exampleNewsletterId = '120363222222222222@newsletter';
+  const exampleProductId = 'produto_123';
+  const exampleTagId = 'tag_123';
+  const exampleQueueItemId = 'job_123';
+  const exampleOperationId = 'op_123';
   const publicBaseUrl = absoluteApiUrl('/v1');
   const [activeDocId, setActiveDocId] = useState('intro');
+  const [referenceMenuOpen, setReferenceMenuOpen] = useState(false);
   const queuedResponse = `{
   "messageId": "msg_123",
   "status": "QUEUED"
 }`;
-  const docs: DocsEndpoint[] = [
+  const operationResponse = `{
+  "operationId": "${exampleOperationId}",
+  "status": "QUEUED"
+}`;
+  function autoCurl(method: DocsEndpoint['method'], path: string, body?: string) {
+    const url = `${publicBaseUrl}${path.replace('/v1', '')}`;
+    const headers = `  -H "Authorization: Bearer ravox_live_xxxxx"`;
+
+    if (body) {
+      return `curl -X ${method} "${url}" \\
+${headers} \\
+  -H "Content-Type: application/json" \\
+  -d '${body}'`;
+    }
+
+    return method === 'GET'
+      ? `curl "${url}" \\
+${headers}`
+      : `curl -X ${method} "${url}" \\
+${headers}`;
+  }
+
+  function autoDoc(input: Omit<DocsEndpoint, 'curl' | 'responseBody' | 'notes'> & Partial<Pick<DocsEndpoint, 'curl' | 'responseBody' | 'notes'>>) {
+    return {
+      responseBody: operationResponse,
+      notes: [
+        'Rotas que retornam operationId são assíncronas: consulte GET /operations/:operationId para obter SUCCESS, FAILED e result.',
+        'A execução depende da instância conectada, das permissões reais no WhatsApp e do suporte atual do adapter Baileys.',
+      ],
+      ...input,
+      curl: input.curl ?? autoCurl(input.method, input.path, input.requestBody),
+    };
+  }
+
+  const baseDocs: DocsEndpoint[] = [
     {
       id: 'send-text',
       group: 'Mensagens',
@@ -3010,7 +4192,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
       path: `/v1/instances/${exampleInstanceId}/send-text`,
       description: 'Enfileira uma mensagem de texto para um contato usando uma instância conectada.',
       requestBody: `{
-  "to": "5585999999999",
+  "to": "+5585999999999",
   "body": "Olá, mensagem enviada pela RavoxZap"
 }`,
       responseBody: queuedResponse,
@@ -3018,10 +4200,10 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
   -H "Authorization: Bearer ravox_live_xxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "to": "5585999999999",
+    "to": "+5585999999999",
     "body": "Olá, mensagem enviada pela RavoxZap"
 }'`,
-      notes: ['O telefone deve ser enviado com DDI e somente dígitos.', 'O envio é assíncrono: o worker processa a fila e atualiza o status da mensagem.'],
+      notes: ['O campo to deve usar formato internacional: +55 + DDD + número. Também aceitamos somente dígitos, como 5585999999999.', 'O envio é assíncrono: o worker processa a fila e atualiza o status da mensagem.'],
     },
     {
       id: 'send-image',
@@ -3031,7 +4213,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
       path: `/v1/instances/${exampleInstanceId}/send-image`,
       description: 'Envia uma imagem por URL pública ou data URL base64. O limite inicial é 15MB.',
       requestBody: `{
-  "to": "5585999999999",
+  "to": "+5585999999999",
   "image": "https://site.com/imagem.png",
   "caption": "Legenda opcional"
 }`,
@@ -3045,7 +4227,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
   -H "Authorization: Bearer ravox_live_xxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "to": "5585999999999",
+    "to": "+5585999999999",
     "image": "https://site.com/imagem.png",
     "caption": "Legenda opcional"
   }'`,
@@ -3059,7 +4241,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
       path: `/v1/instances/${exampleInstanceId}/send-audio`,
       description: 'Envia um áudio por URL pública ou data URL base64. O limite inicial é 20MB.',
       requestBody: `{
-  "to": "5585999999999",
+  "to": "+5585999999999",
   "audio": "https://site.com/audio.mp3"
 }`,
       responseBody: `{
@@ -3072,7 +4254,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
   -H "Authorization: Bearer ravox_live_xxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "to": "5585999999999",
+    "to": "+5585999999999",
     "audio": "https://site.com/audio.mp3"
   }'`,
       notes: ['A URL precisa responder com content-type de áudio.', 'O arquivo é salvo localmente antes de ser enviado pelo worker.'],
@@ -3085,7 +4267,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
       path: `/v1/instances/${exampleInstanceId}/send-video`,
       description: 'Envia um vídeo por URL pública ou data URL base64. O limite inicial é 100MB.',
       requestBody: `{
-  "to": "5585999999999",
+  "to": "+5585999999999",
   "video": "https://site.com/video.mp4",
   "caption": "Legenda opcional"
 }`,
@@ -3099,7 +4281,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
   -H "Authorization: Bearer ravox_live_xxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "to": "5585999999999",
+    "to": "+5585999999999",
     "video": "https://site.com/video.mp4",
     "caption": "Legenda opcional"
   }'`,
@@ -3113,7 +4295,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
       path: `/v1/instances/${exampleInstanceId}/send-document`,
       description: 'Envia um documento por URL pública ou data URL base64. O limite inicial é 50MB.',
       requestBody: `{
-  "to": "5585999999999",
+  "to": "+5585999999999",
   "document": "https://site.com/contrato.pdf",
   "fileName": "contrato.pdf",
   "caption": "Legenda opcional"
@@ -3128,7 +4310,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
   -H "Authorization: Bearer ravox_live_xxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "to": "5585999999999",
+    "to": "+5585999999999",
     "document": "https://site.com/contrato.pdf",
     "fileName": "contrato.pdf"
   }'`,
@@ -3244,8 +4426,1255 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
   -H "Authorization: Bearer ravox_live_xxxxx"`,
       notes: ['Retorna no máximo 200 mensagens por chamada neste MVP.', 'Use o chatId retornado pela listagem de chats.'],
     },
+    {
+      id: 'chat-detail',
+      group: 'Conversas',
+      method: 'GET',
+      title: 'Metadata do chat',
+      path: `/v1/instances/${exampleInstanceId}/chats/${exampleChatId}`,
+      description: 'Retorna dados operacionais do chat, incluindo arquivamento, fixação, leitura e silenciamento.',
+      responseBody: `{
+  "id": "${exampleChatId}",
+  "remoteJid": "5585999999999@s.whatsapp.net",
+  "name": "Cliente",
+  "archivedAt": null,
+  "pinnedAt": null,
+  "mutedUntil": null,
+  "isRead": true,
+  "unreadCount": 0,
+  "ephemeralExpiration": null
+}`,
+      curl: `curl "${publicBaseUrl}/instances/${exampleInstanceId}/chats/${exampleChatId}" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['Use esta rota para confirmar o estado local do chat depois de uma operação.', 'O cache é atualizado pelo worker após sucesso no WhatsApp.'],
+    },
+    {
+      id: 'chat-read',
+      group: 'Conversas',
+      method: 'POST',
+      title: 'Marcar chat como lido',
+      path: `/v1/instances/${exampleInstanceId}/chats/${exampleChatId}/read`,
+      description: 'Cria uma operação assíncrona para marcar o chat como lido ou não lido.',
+      requestBody: `{
+  "read": true
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/chats/${exampleChatId}/read" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"read":true}'`,
+      notes: ['Retorna operationId porque a confirmação depende do socket WhatsApp.', 'Consulte a operação para ver SUCCESS ou FAILED.'],
+    },
+    {
+      id: 'chat-archive',
+      group: 'Conversas',
+      method: 'POST',
+      title: 'Arquivar chat',
+      path: `/v1/instances/${exampleInstanceId}/chats/${exampleChatId}/archive`,
+      description: 'Arquiva ou desarquiva uma conversa no WhatsApp e no cache local.',
+      requestBody: `{
+  "archived": true
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/chats/${exampleChatId}/archive" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"archived":true}'`,
+      notes: ['Envie false para desarquivar.', 'A lista de chats pública não retorna chats com delete local.'],
+    },
+    {
+      id: 'chat-pin',
+      group: 'Conversas',
+      method: 'POST',
+      title: 'Fixar chat',
+      path: `/v1/instances/${exampleInstanceId}/chats/${exampleChatId}/pin`,
+      description: 'Fixa ou desafixa uma conversa.',
+      requestBody: `{
+  "pinned": true
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/chats/${exampleChatId}/pin" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"pinned":true}'`,
+      notes: ['Envie false para desafixar.', 'O painel usa este campo para os filtros de chats fixados.'],
+    },
+    {
+      id: 'chat-mute',
+      group: 'Conversas',
+      method: 'POST',
+      title: 'Mutar chat',
+      path: `/v1/instances/${exampleInstanceId}/chats/${exampleChatId}/mute`,
+      description: 'Silencia o chat até uma data ou remove o silêncio enviando null.',
+      requestBody: `{
+  "mutedUntil": "2026-06-01T12:00:00.000Z"
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/chats/${exampleChatId}/mute" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"mutedUntil":"2026-06-01T12:00:00.000Z"}'`,
+      notes: ['Use data ISO 8601.', 'Para remover silêncio, envie {"mutedUntil": null}.'],
+    },
+    {
+      id: 'chat-clear',
+      group: 'Conversas',
+      method: 'POST',
+      title: 'Limpar chat',
+      path: `/v1/instances/${exampleInstanceId}/chats/${exampleChatId}/clear`,
+      description: 'Limpa as mensagens da conversa após comando confirmado pelo WhatsApp.',
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/chats/${exampleChatId}/clear" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['A limpeza local acontece somente depois do sucesso no worker.', 'Use com cuidado: a ação remove histórico local desse chat.'],
+    },
+    {
+      id: 'chat-delete',
+      group: 'Conversas',
+      method: 'POST',
+      title: 'Excluir chat',
+      path: `/v1/instances/${exampleInstanceId}/chats/${exampleChatId}/delete`,
+      description: 'Remove a conversa no WhatsApp e aplica soft delete no cache local.',
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/chats/${exampleChatId}/delete" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['O chat deixa de aparecer em GET /chats.', 'Mensagens antigas permanecem no banco para auditoria enquanto o soft delete estiver ativo.'],
+    },
+    {
+      id: 'chat-ephemeral',
+      group: 'Conversas',
+      method: 'POST',
+      title: 'Expiração do chat',
+      path: `/v1/instances/${exampleInstanceId}/chats/${exampleChatId}/ephemeral`,
+      description: 'Configura mensagens temporárias em segundos.',
+      requestBody: `{
+  "expirationSeconds": 86400
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/chats/${exampleChatId}/ephemeral" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"expirationSeconds":86400}'`,
+      notes: ['Use 0 para desativar quando o WhatsApp aceitar essa operação.', 'O limite atual é de até 1 ano em segundos.'],
+    },
+    {
+      id: 'operations',
+      group: 'Operações',
+      method: 'GET',
+      title: 'Consultar operação',
+      path: `/v1/instances/${exampleInstanceId}/operations/${exampleOperationId}`,
+      description: 'Consulta uma ação assíncrona de grupo ou chat enfileirada no worker.',
+      responseBody: `{
+  "operationId": "${exampleOperationId}",
+  "instanceId": "${exampleInstanceId}",
+  "type": "GROUP_CREATE",
+  "status": "SUCCESS",
+  "input": {},
+  "result": {},
+  "error": null,
+  "createdAt": "2026-05-28T10:00:00.000Z",
+  "updatedAt": "2026-05-28T10:00:05.000Z"
+}`,
+      curl: `curl "${publicBaseUrl}/instances/${exampleInstanceId}/operations/${exampleOperationId}" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['Status possíveis: QUEUED, RUNNING, SUCCESS e FAILED.', 'Quando falhar, o campo error traz a mensagem legível do worker.'],
+    },
+    {
+      id: 'groups',
+      group: 'Grupos',
+      method: 'GET',
+      title: 'Listar grupos',
+      path: `/v1/instances/${exampleInstanceId}/groups`,
+      description: 'Retorna o cache local de grupos e participantes da instância.',
+      responseBody: `[
+  {
+    "id": "grp_123",
+    "remoteJid": "${exampleGroupId}",
+    "subject": "Grupo suporte",
+    "description": null,
+    "size": 2,
+    "inviteCode": null,
+    "lastSyncedAt": "2026-05-28T10:00:00.000Z",
+    "participants": []
+  }
+]`,
+      curl: `curl "${publicBaseUrl}/instances/${exampleInstanceId}/groups" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['Esta rota não chama o WhatsApp em tempo real.', 'Use sincronizar grupos para atualizar o cache via worker.'],
+    },
+    {
+      id: 'groups-sync',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Sincronizar grupos',
+      path: `/v1/instances/${exampleInstanceId}/groups/sync`,
+      description: 'Enfileira uma sincronização de grupos pelo socket WhatsApp.',
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/sync" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['Atualiza grupos e participantes no banco.', 'Depois consulte GET /groups ou a operação.'],
+    },
+    {
+      id: 'groups-create',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Criar grupo',
+      path: `/v1/instances/${exampleInstanceId}/groups`,
+      description: 'Cria um grupo com nome, participantes iniciais e convite automático opcional.',
+      requestBody: `{
+  "groupName": "Grupo suporte",
+  "phones": ["+5585999999999", "5585888888888"],
+  "autoInvite": true
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"groupName":"Grupo suporte","phones":["+5585999999999"],"autoInvite":true}'`,
+      notes: [
+        'Também aceita o formato legado name + participants.',
+        '@lid não é aceito na criação; esses itens aparecem em phonesNotAdded no resultado da operação.',
+        'Quando autoInvite=true, números não adicionados diretamente recebem o link no privado quando possível.',
+      ],
+    },
+    {
+      id: 'group-detail',
+      group: 'Grupos',
+      method: 'GET',
+      title: 'Metadata do grupo',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}`,
+      description: 'Retorna dados do grupo salvo no cache local.',
+      responseBody: `{
+  "id": "grp_123",
+  "remoteJid": "${exampleGroupId}",
+  "subject": "Grupo suporte",
+  "participants": [
+    { "jid": "5585999999999@s.whatsapp.net", "isAdmin": true, "isSuperAdmin": false }
+  ]
+}`,
+      curl: `curl "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['groupId pode ser o ID interno do banco ou o remoteJid terminado em @g.us.', 'Use sync para atualizar participantes.'],
+    },
+    {
+      id: 'group-metadata-sync',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Sincronizar metadata do grupo',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/metadata/sync`,
+      description: 'Busca os dados atuais do grupo no WhatsApp e atualiza o cache local.',
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/metadata/sync" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['Útil depois de alterar foto, participantes ou configurações fora do RavoxZap.', 'A resposta final fica na operação.'],
+    },
+    {
+      id: 'group-metadata-light',
+      group: 'Grupos',
+      method: 'GET',
+      title: 'Metadata light',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/metadata/light`,
+      description: 'Retorna metadata cacheada sem carregar a lista de participantes.',
+      responseBody: `{
+  "id": "grp_123",
+  "remoteJid": "${exampleGroupId}",
+  "subject": "Grupo suporte",
+  "size": 42,
+  "announce": false,
+  "restrict": true,
+  "pictureUrl": null
+}`,
+      curl: `curl "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/metadata/light" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['Esta rota usa cache local.', 'Use metadata/sync quando precisar consultar o WhatsApp em tempo real.'],
+    },
+    {
+      id: 'group-name',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Atualizar nome do grupo',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/name`,
+      description: 'Atualiza o assunto/nome do grupo.',
+      requestBody: `{
+  "name": "Novo nome"
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/name" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"name":"Novo nome"}'`,
+      notes: ['A instância precisa ter permissão para alterar dados do grupo.', 'O cache é atualizado após sucesso.'],
+    },
+    {
+      id: 'group-description',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Atualizar descrição',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/description`,
+      description: 'Atualiza a descrição do grupo.',
+      requestBody: `{
+  "description": "Descrição do grupo"
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/description" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"description":"Descrição do grupo"}'`,
+      notes: ['Aceita string vazia para limpar a descrição.', 'Respeita permissões reais do WhatsApp.'],
+    },
+    {
+      id: 'group-photo',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Atualizar foto do grupo',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/photo`,
+      description: 'Atualiza a imagem do grupo usando URL, data URL ou base64.',
+      requestBody: `{
+  "image": "https://example.com/grupo.jpg"
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/photo" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"image":"https://example.com/grupo.jpg"}'`,
+      notes: ['Também aceita imageUrl ou imageBase64.', 'A instância precisa ter permissão para alterar a foto.'],
+    },
+    {
+      id: 'group-settings',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Configurações do grupo',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/settings`,
+      description: 'Atualiza permissões de envio, edição, entrada e mensagens temporárias.',
+      requestBody: `{
+  "messages": "admins",
+  "info": "admins",
+  "addMembers": "all",
+  "joinApproval": true,
+  "ephemeralSeconds": 86400
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/settings" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"messages":"admins","info":"admins","joinApproval":true}'`,
+      notes: ['Envie apenas os campos que deseja alterar.', 'Use 0 em ephemeralSeconds para desativar mensagens temporárias.'],
+    },
+    {
+      id: 'group-participants-add',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Adicionar participantes',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/participants/add`,
+      description: 'Adiciona participantes ao grupo.',
+      requestBody: `{
+  "participants": ["+5585999999999"],
+  "autoInvite": true
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/participants/add" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"participants":["+5585999999999"],"autoInvite":true}'`,
+      notes: ['Aceita até 256 participantes por chamada.', 'Quando autoInvite=true, números não adicionados recebem convite privado quando possível.'],
+    },
+    {
+      id: 'group-requests-list',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Listar solicitações pendentes',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/requests/list`,
+      description: 'Lista pedidos pendentes de entrada no grupo.',
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/requests/list" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['A instância precisa ser admin quando o WhatsApp exigir.', 'O resultado vem no campo result.requests da operação.'],
+    },
+    {
+      id: 'group-requests-approve',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Aprovar solicitações',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/requests/approve`,
+      description: 'Aprova participantes que solicitaram entrada no grupo.',
+      requestBody: `{
+  "participants": ["+5585999999999"]
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/requests/approve" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"participants":["+5585999999999"]}'`,
+      notes: ['Use requests/reject com o mesmo body para rejeitar.', 'Após sucesso, o cache do grupo é atualizado.'],
+    },
+    {
+      id: 'group-participants-remove',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Remover participantes',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/participants/remove`,
+      description: 'Remove participantes do grupo.',
+      requestBody: `{
+  "participants": ["+5585999999999"]
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/participants/remove" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"participants":["+5585999999999"]}'`,
+      notes: ['A instância conectada precisa ser admin quando o WhatsApp exigir.', 'O participante deve pertencer ao grupo.'],
+    },
+    {
+      id: 'group-admins-promote',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Promover admin',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/admins/promote`,
+      description: 'Promove participantes para admin do grupo.',
+      requestBody: `{
+  "participants": ["+5585999999999"]
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/admins/promote" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"participants":["+5585999999999"]}'`,
+      notes: ['A instância precisa ser admin.', 'Use demover admin para remover a permissão depois.'],
+    },
+    {
+      id: 'group-admins-demote',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Remover admin',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/admins/demote`,
+      description: 'Remove permissão de admin de participantes.',
+      requestBody: `{
+  "participants": ["+5585999999999"]
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/admins/demote" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"participants":["+5585999999999"]}'`,
+      notes: ['A instância precisa ter permissão no grupo.', 'O WhatsApp pode bloquear remover o criador do grupo.'],
+    },
+    {
+      id: 'group-mention',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Mencionar membros',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/mention`,
+      description: 'Envia mensagem no grupo mencionando participantes específicos.',
+      requestBody: `{
+  "text": "Atenção, pessoal",
+  "participants": ["+5585999999999"]
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/mention" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"text":"Atenção, pessoal","participants":["+5585999999999"]}'`,
+      notes: ['O texto é enviado no grupo via worker.', 'Os JIDs mencionados são normalizados a partir dos telefones.'],
+    },
+    {
+      id: 'group-mention-all',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Mencionar todos',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/mention-all`,
+      description: 'Envia mensagem mencionando todos os participantes do grupo.',
+      requestBody: `{
+  "text": "Aviso importante"
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/mention-all" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"text":"Aviso importante"}'`,
+      notes: ['Usa o suporte nativo de menção geral do WhatsApp quando disponível.', 'O envio depende do tamanho do grupo e limites do WhatsApp.'],
+    },
+    {
+      id: 'group-mention-group',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Mencionar grupo',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/mention-group`,
+      description: 'Envia mensagem mencionando outro grupo pelo remoteJid.',
+      requestBody: `{
+  "text": "Veja também o grupo relacionado",
+  "groups": ["120363000000000000@g.us"]
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/mention-group" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"text":"Veja também o grupo relacionado","groups":["120363000000000000@g.us"]}'`,
+      notes: ['Depende de suporte do WhatsApp/Baileys para groupMentions.', 'A operação falha se o envio não for aceito pelo adapter.'],
+    },
+    {
+      id: 'group-leave',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Sair do grupo',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/leave`,
+      description: 'Faz a instância conectada sair do grupo.',
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/leave" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['Use com cuidado: o número conectado sai do grupo real.', 'O grupo permanece no cache até uma nova sincronização.'],
+    },
+    {
+      id: 'group-invite-link',
+      group: 'Grupos',
+      method: 'GET',
+      title: 'Gerar link de convite',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/invite-link`,
+      description: 'Enfileira a geração do link de convite do grupo.',
+      responseBody: operationResponse,
+      curl: `curl "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/invite-link" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['Consulte a operação para ler o inviteCode e o link final.', 'A instância precisa ter permissão para acessar o convite.'],
+    },
+    {
+      id: 'group-invite-revoke',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Revogar convite',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/invite-link/revoke`,
+      description: 'Revoga o link de convite atual e gera um novo código no WhatsApp.',
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/${exampleGroupId}/invite-link/revoke" \\
+  -H "Authorization: Bearer ravox_live_xxxxx"`,
+      notes: ['Links antigos deixam de funcionar após a revogação.', 'Consulte a operação para obter o novo código.'],
+    },
+    {
+      id: 'group-invite-accept',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Aceitar convite',
+      path: `/v1/instances/${exampleInstanceId}/groups/invite/accept`,
+      description: 'Faz a instância conectada entrar em um grupo usando o código de convite.',
+      requestBody: `{
+  "url": "https://chat.whatsapp.com/ABC123"
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/invite/accept" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"url":"https://chat.whatsapp.com/ABC123"}'`,
+      notes: ['Também aceita code com apenas o código do convite.', 'Depois de aceitar, sincronize grupos para atualizar o cache.'],
+    },
+    {
+      id: 'group-invite-metadata',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Metadata do convite',
+      path: `/v1/instances/${exampleInstanceId}/groups/invite/metadata`,
+      description: 'Consulta dados de um convite por operação assíncrona.',
+      requestBody: `{
+  "code": "ABC123"
+}`,
+      responseBody: operationResponse,
+      curl: `curl -X POST "${publicBaseUrl}/instances/${exampleInstanceId}/groups/invite/metadata" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"code":"ABC123"}'`,
+      notes: ['Também existe GET /groups/invite/:code/metadata para código puro.', 'Útil para validar o grupo antes de aceitar o convite.'],
+    },
   ];
-  const groups = ['Mensagens', 'Instância', 'Conversas'];
+  const additionalDocs: DocsEndpoint[] = [
+    autoDoc({
+      id: 'send-location',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Enviar localização',
+      path: `/v1/instances/${exampleInstanceId}/send-location`,
+      description: 'Envia uma localização com latitude, longitude, nome e endereço opcionais.',
+      requestBody: `{
+  "to": "+${examplePhone}",
+  "latitude": -3.7319,
+  "longitude": -38.5267,
+  "name": "Fortaleza",
+  "address": "CE, Brasil"
+}`,
+    }),
+    autoDoc({
+      id: 'send-contact',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Enviar contato',
+      path: `/v1/instances/${exampleInstanceId}/send-contact`,
+      description: 'Envia um cartão de contato para um chat.',
+      requestBody: `{
+  "to": "+${examplePhone}",
+  "contact": {
+    "displayName": "Contato teste",
+    "phones": ["+5585888888888"]
+  }
+}`,
+    }),
+    autoDoc({
+      id: 'send-contacts',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Enviar múltiplos contatos',
+      path: `/v1/instances/${exampleInstanceId}/send-contacts`,
+      description: 'Envia até 50 cartões de contato na mesma mensagem.',
+      requestBody: `{
+  "to": "+${examplePhone}",
+  "contacts": [
+    { "displayName": "Contato A", "phones": ["+5585888888888"] }
+  ]
+}`,
+    }),
+    autoDoc({
+      id: 'send-sticker',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Enviar sticker',
+      path: `/v1/instances/${exampleInstanceId}/send-sticker`,
+      description: 'Envia figurinha por URL, data URL ou base64.',
+      requestBody: `{
+  "to": "+${examplePhone}",
+  "sticker": "https://site.com/sticker.webp"
+}`,
+    }),
+    autoDoc({
+      id: 'send-gif',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Enviar GIF',
+      path: `/v1/instances/${exampleInstanceId}/send-gif`,
+      description: 'Envia um GIF a partir de URL, data URL ou base64.',
+      requestBody: `{
+  "to": "+${examplePhone}",
+  "gif": "https://site.com/animacao.gif",
+  "caption": "Legenda opcional"
+}`,
+    }),
+    autoDoc({
+      id: 'send-link',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Enviar link',
+      path: `/v1/instances/${exampleInstanceId}/send-link`,
+      description: 'Envia um link com texto opcional para o WhatsApp gerar prévia quando possível.',
+      requestBody: `{
+  "to": "+${examplePhone}",
+  "url": "https://ravoxzap.local",
+  "text": "Veja este link"
+}`,
+    }),
+    autoDoc({
+      id: 'send-reaction',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Enviar reação',
+      path: `/v1/instances/${exampleInstanceId}/send-reaction`,
+      description: 'Reage a uma mensagem existente por ID.',
+      requestBody: `{
+  "remoteJid": "${examplePhone}@s.whatsapp.net",
+  "messageId": "MESSAGE_ID",
+  "emoji": "👍"
+}`,
+    }),
+    autoDoc({
+      id: 'remove-reaction',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Remover reação',
+      path: `/v1/instances/${exampleInstanceId}/remove-reaction`,
+      description: 'Remove a reação enviada anteriormente em uma mensagem.',
+      requestBody: `{
+  "remoteJid": "${examplePhone}@s.whatsapp.net",
+  "messageId": "MESSAGE_ID"
+}`,
+    }),
+    autoDoc({
+      id: 'send-poll',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Enviar enquete',
+      path: `/v1/instances/${exampleInstanceId}/send-poll`,
+      description: 'Cria e envia uma enquete com opções de voto.',
+      requestBody: `{
+  "to": "+${examplePhone}",
+  "name": "Qual horário?",
+  "options": ["Manhã", "Tarde"],
+  "selectableCount": 1
+}`,
+    }),
+    autoDoc({
+      id: 'send-poll-vote',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Votar em enquete',
+      path: `/v1/instances/${exampleInstanceId}/send-poll-vote`,
+      description: 'Endpoint reservado para voto em enquete.',
+      requestBody: `{
+  "pollMessageId": "MESSAGE_ID",
+  "optionName": "Manhã"
+}`,
+      notes: ['Hoje esta operação retorna FAILED: voto de enquete ainda não é suportado com segurança pelo adapter atual.', 'Mantida na referência para deixar o contrato explícito e evitar endpoint fantasma.'],
+    }),
+    autoDoc({
+      id: 'send-ptv',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Enviar PTV',
+      path: `/v1/instances/${exampleInstanceId}/send-ptv`,
+      description: 'Envia vídeo no formato de mensagem circular/PTV quando o WhatsApp aceitar.',
+      requestBody: `{
+  "to": "+${examplePhone}",
+  "video": "https://site.com/video.mp4",
+  "caption": "Opcional"
+}`,
+    }),
+    autoDoc({
+      id: 'message-reply',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Responder mensagem',
+      path: `/v1/instances/${exampleInstanceId}/messages/reply`,
+      description: 'Responde uma mensagem existente mantendo referência ao ID citado.',
+      requestBody: `{
+  "to": "+${examplePhone}",
+  "text": "Resposta",
+  "messageId": "MESSAGE_ID"
+}`,
+    }),
+    autoDoc({
+      id: 'message-forward',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Encaminhar mensagem',
+      path: `/v1/instances/${exampleInstanceId}/messages/forward`,
+      description: 'Encaminha um payload bruto de mensagem para outro chat.',
+      requestBody: `{
+  "to": "+${examplePhone}",
+  "message": {}
+}`,
+    }),
+    autoDoc({
+      id: 'message-delete',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Apagar mensagem',
+      path: `/v1/instances/${exampleInstanceId}/messages/delete`,
+      description: 'Apaga uma mensagem pelo ID e JID remoto.',
+      requestBody: `{
+  "remoteJid": "${examplePhone}@s.whatsapp.net",
+  "messageId": "MESSAGE_ID",
+  "fromMe": true
+}`,
+    }),
+    autoDoc({
+      id: 'message-read',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Marcar mensagem como lida',
+      path: `/v1/instances/${exampleInstanceId}/messages/read`,
+      description: 'Envia recibo de leitura para uma mensagem específica.',
+      requestBody: `{
+  "remoteJid": "${examplePhone}@s.whatsapp.net",
+  "messageId": "MESSAGE_ID"
+}`,
+    }),
+    autoDoc({
+      id: 'message-pin',
+      group: 'Mensagens avançadas',
+      method: 'POST',
+      title: 'Fixar mensagem',
+      path: `/v1/instances/${exampleInstanceId}/messages/pin`,
+      description: 'Fixa ou desafixa uma mensagem por 24h, 7 dias ou 30 dias.',
+      requestBody: `{
+  "remoteJid": "${examplePhone}@s.whatsapp.net",
+  "messageId": "MESSAGE_ID",
+  "type": 1,
+  "time": 86400
+}`,
+      notes: ['type=1 fixa; type=0 desafixa.', 'time aceita 86400, 604800 ou 2592000 segundos.'],
+    }),
+    autoDoc({
+      id: 'contacts-check',
+      group: 'Contatos',
+      method: 'POST',
+      title: 'Verificar número',
+      path: `/v1/instances/${exampleInstanceId}/contacts/check`,
+      description: 'Verifica se um telefone está disponível no WhatsApp.',
+      requestBody: `{
+  "phone": "+${examplePhone}"
+}`,
+    }),
+    autoDoc({
+      id: 'contacts-check-batch',
+      group: 'Contatos',
+      method: 'POST',
+      title: 'Verificar números em lote',
+      path: `/v1/instances/${exampleInstanceId}/contacts/check-batch`,
+      description: 'Verifica múltiplos telefones no WhatsApp.',
+      requestBody: `{
+  "phones": ["+${examplePhone}", "+5585888888888"]
+}`,
+    }),
+    autoDoc({
+      id: 'contacts-add',
+      group: 'Contatos',
+      method: 'POST',
+      title: 'Salvar contato no WhatsApp',
+      path: `/v1/instances/${exampleInstanceId}/contacts`,
+      description: 'Adiciona um contato na agenda do WhatsApp conectado quando o adapter permitir.',
+      requestBody: `{
+  "phone": "+${examplePhone}",
+  "name": "Cliente"
+}`,
+    }),
+    autoDoc({
+      id: 'contacts-remove',
+      group: 'Contatos',
+      method: 'DELETE',
+      title: 'Remover contato do WhatsApp',
+      path: `/v1/instances/${exampleInstanceId}/contacts/${examplePhone}`,
+      description: 'Remove um contato da agenda do WhatsApp conectado quando suportado.',
+    }),
+    autoDoc({
+      id: 'contacts-metadata',
+      group: 'Contatos',
+      method: 'GET',
+      title: 'Metadata do contato',
+      path: `/v1/instances/${exampleInstanceId}/contacts/${examplePhone}/metadata`,
+      description: 'Busca metadados disponíveis do contato no WhatsApp.',
+    }),
+    autoDoc({
+      id: 'contacts-profile-picture',
+      group: 'Contatos',
+      method: 'GET',
+      title: 'Foto do contato',
+      path: `/v1/instances/${exampleInstanceId}/contacts/${examplePhone}/profile-picture`,
+      description: 'Busca a URL da foto de perfil do contato quando visível para a instância.',
+    }),
+    autoDoc({
+      id: 'contacts-block',
+      group: 'Contatos',
+      method: 'POST',
+      title: 'Bloquear contato',
+      path: `/v1/instances/${exampleInstanceId}/contacts/${examplePhone}/block`,
+      description: 'Bloqueia um contato no WhatsApp conectado.',
+    }),
+    autoDoc({
+      id: 'contacts-unblock',
+      group: 'Contatos',
+      method: 'POST',
+      title: 'Desbloquear contato',
+      path: `/v1/instances/${exampleInstanceId}/contacts/${examplePhone}/unblock`,
+      description: 'Remove o bloqueio de um contato.',
+    }),
+    autoDoc({
+      id: 'contacts-report',
+      group: 'Contatos',
+      method: 'POST',
+      title: 'Denunciar contato',
+      path: `/v1/instances/${exampleInstanceId}/contacts/${examplePhone}/report`,
+      description: 'Endpoint reservado para denúncia de contato.',
+      notes: ['Hoje esta operação retorna FAILED: denúncia não é suportada com segurança pelo adapter atual.', 'Não use em produção até o adapter expor um método confiável.'],
+    }),
+    autoDoc({
+      id: 'privacy-get',
+      group: 'Privacidade',
+      method: 'GET',
+      title: 'Consultar privacidade',
+      path: `/v1/instances/${exampleInstanceId}/privacy`,
+      description: 'Consulta as configurações atuais de privacidade da instância.',
+    }),
+    autoDoc({
+      id: 'privacy-blocklist',
+      group: 'Privacidade',
+      method: 'GET',
+      title: 'Listar bloqueados',
+      path: `/v1/instances/${exampleInstanceId}/privacy/blocklist`,
+      description: 'Lista contatos bloqueados quando o WhatsApp retornar essa informação.',
+    }),
+    ...[
+      ['privacy-last-seen', 'Visto por último', 'last-seen', '"all"'],
+      ['privacy-online', 'Online', 'online', '"match_last_seen"'],
+      ['privacy-profile-picture', 'Foto de perfil', 'profile-picture', '"contacts"'],
+      ['privacy-status', 'Recado/status', 'status', '"contacts"'],
+      ['privacy-read-receipts', 'Confirmação de leitura', 'read-receipts', '"all"'],
+      ['privacy-group-add', 'Adicionar em grupos', 'group-add', '"contacts"'],
+    ].map(([id, title, slug, value]) => autoDoc({
+      id: id ?? '',
+      group: 'Privacidade',
+      method: 'POST',
+      title: title ?? '',
+      path: `/v1/instances/${exampleInstanceId}/privacy/${slug}`,
+      description: `Atualiza a configuração de privacidade: ${title}.`,
+      requestBody: `{
+  "value": ${value}
+}`,
+    })),
+    autoDoc({
+      id: 'privacy-default-disappearing',
+      group: 'Privacidade',
+      method: 'POST',
+      title: 'Temporárias padrão',
+      path: `/v1/instances/${exampleInstanceId}/privacy/default-disappearing`,
+      description: 'Define a duração padrão de mensagens temporárias para novas conversas.',
+      requestBody: `{
+  "duration": 86400
+}`,
+    }),
+    autoDoc({
+      id: 'instance-me',
+      group: 'Perfil e instância',
+      method: 'GET',
+      title: 'Dados da conta',
+      path: `/v1/instances/${exampleInstanceId}/me`,
+      description: 'Retorna dados do usuário conectado no socket WhatsApp.',
+    }),
+    autoDoc({
+      id: 'instance-device',
+      group: 'Perfil e instância',
+      method: 'GET',
+      title: 'Dados do dispositivo',
+      path: `/v1/instances/${exampleInstanceId}/device`,
+      description: 'Retorna metadados do dispositivo/sessão conectada.',
+    }),
+    autoDoc({
+      id: 'instance-pairing-code',
+      group: 'Perfil e instância',
+      method: 'POST',
+      title: 'Gerar pairing code',
+      path: `/v1/instances/${exampleInstanceId}/pairing-code`,
+      description: 'Solicita código de pareamento por telefone, mantendo QR Code como fluxo principal.',
+      requestBody: `{
+  "phone": "+${examplePhone}"
+}`,
+    }),
+    autoDoc({
+      id: 'profile-name',
+      group: 'Perfil e instância',
+      method: 'POST',
+      title: 'Atualizar nome do perfil',
+      path: `/v1/instances/${exampleInstanceId}/profile/name`,
+      description: 'Atualiza o nome público do perfil da instância.',
+      requestBody: `{
+  "name": "RavoxZap"
+}`,
+    }),
+    autoDoc({
+      id: 'profile-description',
+      group: 'Perfil e instância',
+      method: 'POST',
+      title: 'Atualizar recado',
+      path: `/v1/instances/${exampleInstanceId}/profile/description`,
+      description: 'Atualiza o recado/sobre do perfil da instância.',
+      requestBody: `{
+  "description": "Atendimento online"
+}`,
+    }),
+    autoDoc({
+      id: 'profile-picture',
+      group: 'Perfil e instância',
+      method: 'POST',
+      title: 'Atualizar foto do perfil',
+      path: `/v1/instances/${exampleInstanceId}/profile/picture`,
+      description: 'Atualiza a foto de perfil com URL, data URL ou base64.',
+      requestBody: `{
+  "image": "https://site.com/perfil.jpg"
+}`,
+    }),
+    autoDoc({
+      id: 'profile-picture-remove',
+      group: 'Perfil e instância',
+      method: 'POST',
+      title: 'Remover foto do perfil',
+      path: `/v1/instances/${exampleInstanceId}/profile/picture/remove`,
+      description: 'Remove a foto de perfil da instância conectada.',
+    }),
+    autoDoc({
+      id: 'status-send-text',
+      group: 'Status',
+      method: 'POST',
+      title: 'Enviar status de texto',
+      path: `/v1/instances/${exampleInstanceId}/status/send-text`,
+      description: 'Publica texto no status da conta conectada.',
+      requestBody: `{
+  "text": "Olá pelo RavoxZap",
+  "backgroundColor": "#111318",
+  "font": 0
+}`,
+    }),
+    autoDoc({
+      id: 'status-send-image',
+      group: 'Status',
+      method: 'POST',
+      title: 'Enviar status de imagem',
+      path: `/v1/instances/${exampleInstanceId}/status/send-image`,
+      description: 'Publica imagem no status da conta conectada.',
+      requestBody: `{
+  "image": "https://site.com/status.jpg",
+  "caption": "Legenda"
+}`,
+    }),
+    autoDoc({
+      id: 'status-send-video',
+      group: 'Status',
+      method: 'POST',
+      title: 'Enviar status de vídeo',
+      path: `/v1/instances/${exampleInstanceId}/status/send-video`,
+      description: 'Publica vídeo no status da conta conectada.',
+      requestBody: `{
+  "video": "https://site.com/status.mp4",
+  "caption": "Legenda"
+}`,
+    }),
+    ...[
+      ['status-reply-text', 'Responder status com texto', 'reply-text', '{\n  "statusJid": "status@broadcast",\n  "messageId": "MESSAGE_ID",\n  "text": "Resposta"\n}'],
+      ['status-reply-sticker', 'Responder status com sticker', 'reply-sticker', '{\n  "statusJid": "status@broadcast",\n  "messageId": "MESSAGE_ID",\n  "sticker": "https://site.com/sticker.webp"\n}'],
+      ['status-reply-gif', 'Responder status com GIF', 'reply-gif', '{\n  "statusJid": "status@broadcast",\n  "messageId": "MESSAGE_ID",\n  "gif": "https://site.com/animacao.gif"\n}'],
+    ].map(([id, title, slug, body]) => autoDoc({
+      id: id ?? '',
+      group: 'Status',
+      method: 'POST',
+      title: title ?? '',
+      path: `/v1/instances/${exampleInstanceId}/status/${slug}`,
+      description: `${title} quando o payload recebido tiver chave de status suficiente.`,
+      requestBody: body,
+    })),
+    autoDoc({
+      id: 'group-invite-metadata-get',
+      group: 'Grupos',
+      method: 'GET',
+      title: 'Metadata do convite por código',
+      path: `/v1/instances/${exampleInstanceId}/groups/invite/ABC123/metadata`,
+      description: 'Consulta metadata de convite informando o código direto na URL.',
+    }),
+    autoDoc({
+      id: 'group-requests-reject',
+      group: 'Grupos',
+      method: 'POST',
+      title: 'Rejeitar solicitações',
+      path: `/v1/instances/${exampleInstanceId}/groups/${exampleGroupId}/requests/reject`,
+      description: 'Rejeita participantes que solicitaram entrada no grupo.',
+      requestBody: `{
+  "participants": ["+${examplePhone}"]
+}`,
+    }),
+    autoDoc({
+      id: 'communities-sync',
+      group: 'Comunidades',
+      method: 'POST',
+      title: 'Sincronizar comunidades',
+      path: `/v1/instances/${exampleInstanceId}/communities/sync`,
+      description: 'Busca comunidades em que a instância participa.',
+    }),
+    autoDoc({
+      id: 'communities-create',
+      group: 'Comunidades',
+      method: 'POST',
+      title: 'Criar comunidade',
+      path: `/v1/instances/${exampleInstanceId}/communities`,
+      description: 'Cria uma comunidade no WhatsApp quando o adapter e a conta permitem.',
+      requestBody: `{
+  "name": "Comunidade Ravox",
+  "description": "Assuntos importantes"
+}`,
+    }),
+    autoDoc({
+      id: 'communities-invite-accept',
+      group: 'Comunidades',
+      method: 'POST',
+      title: 'Aceitar convite de comunidade',
+      path: `/v1/instances/${exampleInstanceId}/communities/invite/accept`,
+      description: 'Aceita convite de comunidade por código ou URL.',
+      requestBody: `{
+  "url": "https://chat.whatsapp.com/ABC123"
+}`,
+    }),
+    ...[
+      ['communities-metadata', 'GET', 'Metadata da comunidade', '', undefined],
+      ['communities-name', 'POST', 'Atualizar nome da comunidade', '/name', '{\n  "name": "Novo nome"\n}'],
+      ['communities-description', 'POST', 'Atualizar descrição da comunidade', '/description', '{\n  "description": "Nova descrição"\n}'],
+      ['communities-settings', 'POST', 'Configurações da comunidade', '/settings', '{\n  "messages": "admins",\n  "info": "admins",\n  "addMembers": "admins",\n  "joinApproval": true,\n  "ephemeralSeconds": 86400\n}'],
+      ['communities-participants-add', 'POST', 'Adicionar participantes', '/participants/add', `{\n  "participants": ["+${examplePhone}"]\n}`],
+      ['communities-participants-remove', 'POST', 'Remover participantes', '/participants/remove', `{\n  "participants": ["+${examplePhone}"]\n}`],
+      ['communities-admins-promote', 'POST', 'Promover admin', '/admins/promote', `{\n  "participants": ["+${examplePhone}"]\n}`],
+      ['communities-admins-demote', 'POST', 'Remover permissão de admin', '/admins/demote', `{\n  "participants": ["+${examplePhone}"]\n}`],
+      ['communities-groups-link', 'POST', 'Vincular grupos', '/groups/link', `{\n  "groups": ["${exampleGroupId}"]\n}`],
+      ['communities-groups-unlink', 'POST', 'Desvincular grupos', '/groups/unlink', `{\n  "groups": ["${exampleGroupId}"]\n}`],
+      ['communities-invite-link', 'GET', 'Gerar link da comunidade', '/invite-link', undefined],
+      ['communities-invite-revoke', 'POST', 'Revogar link da comunidade', '/invite-link/revoke', undefined],
+    ].map(([id, method, title, suffix, body]) => autoDoc({
+      id: id ?? '',
+      group: 'Comunidades',
+      method: method as DocsEndpoint['method'],
+      title: title ?? '',
+      path: `/v1/instances/${exampleInstanceId}/communities/${exampleCommunityId}${suffix ?? ''}`,
+      description: `${title} usando o remoteJid da comunidade.`,
+      requestBody: body,
+    })),
+    autoDoc({
+      id: 'newsletters-create',
+      group: 'Newsletters',
+      method: 'POST',
+      title: 'Criar canal',
+      path: `/v1/instances/${exampleInstanceId}/newsletters`,
+      description: 'Cria um canal/newsletter no WhatsApp quando a conta permitir.',
+      requestBody: `{
+  "name": "Canal Ravox",
+  "description": "Atualizações"
+}`,
+    }),
+    autoDoc({
+      id: 'newsletters-list',
+      group: 'Newsletters',
+      method: 'GET',
+      title: 'Listar canais',
+      path: `/v1/instances/${exampleInstanceId}/newsletters`,
+      description: 'Lista canais disponíveis para a instância conforme suporte do adapter.',
+    }),
+    autoDoc({
+      id: 'newsletters-search',
+      group: 'Newsletters',
+      method: 'POST',
+      title: 'Buscar canais',
+      path: `/v1/instances/${exampleInstanceId}/newsletters/search`,
+      description: 'Endpoint reservado para busca pública de canais.',
+      requestBody: `{
+  "query": "ravox"
+}`,
+      notes: ['Hoje esta operação retorna FAILED: busca pública de canais não é suportada com segurança pelo adapter atual.'],
+    }),
+    ...[
+      ['newsletters-metadata', 'GET', 'Metadata do canal', '', undefined],
+      ['newsletters-follow', 'POST', 'Seguir canal', '/follow', undefined],
+      ['newsletters-unfollow', 'POST', 'Deixar de seguir canal', '/unfollow', undefined],
+      ['newsletters-mute', 'POST', 'Mutar canal', '/mute', undefined],
+      ['newsletters-unmute', 'POST', 'Desmutar canal', '/unmute', undefined],
+      ['newsletters-delete', 'DELETE', 'Deletar canal', '', undefined],
+      ['newsletters-name', 'POST', 'Atualizar nome do canal', '/name', '{\n  "name": "Novo nome"\n}'],
+      ['newsletters-description', 'POST', 'Atualizar descrição do canal', '/description', '{\n  "description": "Nova descrição"\n}'],
+      ['newsletters-picture', 'POST', 'Atualizar foto do canal', '/picture', '{\n  "image": "https://site.com/canal.jpg"\n}'],
+      ['newsletters-admin-invite-accept', 'POST', 'Aceitar convite admin', '/admin-invite/accept', '{\n  "message": {}\n}'],
+      ['newsletters-admin-invite-revoke', 'POST', 'Revogar convite admin', '/admin-invite/revoke', `{\n  "invitedJid": "+${examplePhone}"\n}`],
+      ['newsletters-admin-remove', 'POST', 'Remover admin do canal', '/admins/remove', `{\n  "userJid": "+${examplePhone}"\n}`],
+      ['newsletters-transfer', 'POST', 'Transferir propriedade', '/transfer-ownership', `{\n  "userJid": "+${examplePhone}"\n}`],
+      ['newsletters-react', 'POST', 'Reagir em mensagem do canal', '/messages/react', '{\n  "serverId": "MESSAGE_ID",\n  "reaction": "👍"\n}'],
+      ['newsletters-messages', 'GET', 'Buscar mensagens do canal', '/messages?count=20', undefined],
+    ].map(([id, method, title, suffix, body]) => autoDoc({
+      id: id ?? '',
+      group: 'Newsletters',
+      method: method as DocsEndpoint['method'],
+      title: title ?? '',
+      path: `/v1/instances/${exampleInstanceId}/newsletters/${exampleNewsletterId}${suffix ?? ''}`,
+      description: `${title}.`,
+      requestBody: body,
+      notes: id === 'newsletters-admin-invite-accept'
+        ? ['Hoje esta operação retorna FAILED sem o payload completo de mensagem de convite.', 'Use apenas quando o adapter expuser uma chave de convite confiável.']
+        : undefined,
+    })),
+    autoDoc({
+      id: 'business-profile',
+      group: 'Business',
+      method: 'GET',
+      title: 'Perfil Business',
+      path: `/v1/instances/${exampleInstanceId}/business/profile`,
+      description: 'Busca o perfil Business da conta conectada ou de um JID informado por query.',
+    }),
+    autoDoc({
+      id: 'business-profile-update',
+      group: 'Business',
+      method: 'PATCH',
+      title: 'Atualizar perfil Business',
+      path: `/v1/instances/${exampleInstanceId}/business/profile`,
+      description: 'Atualiza campos do perfil Business expostos pelo Baileys.',
+      requestBody: `{
+  "updates": {
+    "description": "Atendimento Ravox",
+    "email": "contato@example.com"
+  }
+}`,
+    }),
+    ...[
+      ['business-products', 'GET', 'Listar produtos', '/products', undefined],
+      ['business-product-create', 'POST', 'Criar produto', '/products', '{\n  "product": {\n    "name": "Produto teste",\n    "price": 1000,\n    "currency": "BRL"\n  }\n}'],
+      ['business-product-get', 'GET', 'Buscar produto', `/products/${exampleProductId}`, undefined],
+      ['business-product-update', 'PATCH', 'Editar produto', `/products/${exampleProductId}`, '{\n  "product": {\n    "name": "Produto editado"\n  }\n}'],
+      ['business-product-delete', 'DELETE', 'Deletar produto', `/products/${exampleProductId}`, undefined],
+      ['business-collections', 'GET', 'Listar coleções', '/collections', undefined],
+      ['business-tag-create', 'POST', 'Criar etiqueta', '/tags', '{\n  "name": "Cliente VIP",\n  "color": 1\n}'],
+      ['business-tag-update', 'PATCH', 'Editar etiqueta', `/tags/${exampleTagId}`, '{\n  "name": "Cliente ativo",\n  "color": 2\n}'],
+      ['business-tag-delete', 'DELETE', 'Deletar etiqueta', `/tags/${exampleTagId}`, undefined],
+      ['business-tag-chat-add', 'POST', 'Atribuir etiqueta ao chat', `/tags/${exampleTagId}/chats/add`, `{\n  "remoteJid": "${examplePhone}@s.whatsapp.net"\n}`],
+      ['business-tag-chat-remove', 'POST', 'Remover etiqueta do chat', `/tags/${exampleTagId}/chats/remove`, `{\n  "remoteJid": "${examplePhone}@s.whatsapp.net"\n}`],
+    ].map(([id, method, title, suffix, body]) => autoDoc({
+      id: id ?? '',
+      group: 'Business',
+      method: method as DocsEndpoint['method'],
+      title: title ?? '',
+      path: `/v1/instances/${exampleInstanceId}/business${suffix ?? ''}`,
+      description: `${title} usando os recursos Business disponíveis na conta conectada.`,
+      requestBody: body,
+      notes: ['Requer conta WhatsApp Business e suporte do método correspondente no Baileys.', 'Alguns campos aceitos pelo WhatsApp podem variar por região e tipo de conta.'],
+    })),
+    autoDoc({
+      id: 'queue-list',
+      group: 'Fila',
+      method: 'GET',
+      title: 'Listar fila',
+      path: `/v1/instances/${exampleInstanceId}/queue`,
+      description: 'Lista itens de fila relacionados à instância com paginação simples.',
+      responseBody: `{
+  "items": [],
+  "total": 0
+}`,
+      notes: ['Use query params como page e limit quando necessário.', 'A fila reflete jobs conhecidos pelo BullMQ.'],
+    }),
+    autoDoc({
+      id: 'queue-clear',
+      group: 'Fila',
+      method: 'DELETE',
+      title: 'Limpar fila',
+      path: `/v1/instances/${exampleInstanceId}/queue`,
+      description: 'Remove itens da fila relacionados à instância quando possível.',
+    }),
+    autoDoc({
+      id: 'queue-settings',
+      group: 'Fila',
+      method: 'GET',
+      title: 'Configurações da fila',
+      path: `/v1/instances/${exampleInstanceId}/queue/settings`,
+      description: 'Consulta comportamento atual de fila da instância.',
+      responseBody: `{
+  "instanceId": "${exampleInstanceId}",
+  "enqueueWhenDisconnected": true,
+  "persisted": false
+}`,
+      notes: ['Contrato atual é útil para UI e integrações.', 'Persistência real de settings pode depender de implementação posterior.'],
+    }),
+    autoDoc({
+      id: 'queue-settings-update',
+      group: 'Fila',
+      method: 'PATCH',
+      title: 'Atualizar configurações da fila',
+      path: `/v1/instances/${exampleInstanceId}/queue/settings`,
+      description: 'Atualiza preferências de enfileiramento da instância.',
+      requestBody: `{
+  "enqueueWhenDisconnected": true
+}`,
+      notes: ['Contrato atual pode retornar persisted=false quando a configuração ainda não estiver persistida no banco.'],
+    }),
+    autoDoc({
+      id: 'queue-delete-item',
+      group: 'Fila',
+      method: 'DELETE',
+      title: 'Remover item da fila',
+      path: `/v1/instances/${exampleInstanceId}/queue/${exampleQueueItemId}`,
+      description: 'Remove um item específico da fila pelo ID do job.',
+    }),
+  ];
+  const docs: DocsEndpoint[] = [...baseDocs, ...additionalDocs];
+  const groups = ['Mensagens', 'Mensagens avançadas', 'Instância', 'Perfil e instância', 'Conversas', 'Contatos', 'Privacidade', 'Status', 'Grupos', 'Comunidades', 'Newsletters', 'Business', 'Fila', 'Operações'];
   const activeDoc = docs.find(doc => doc.id === activeDocId);
   const webhookPayload = `{
   "event": "message.received",
@@ -3259,22 +5688,32 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
   }
 }`;
   const roadmapItems = [
-    'Contatos compartilhados na API pública',
-    'Localização',
-    'Stickers',
-    'Reações',
-    'Grupos',
-    'Botões e listas',
-    'Enquetes',
-    'Catálogo e recursos Business',
+    'Botões e listas interativas quando o adapter expuser suporte confiável',
+    'Chamadas/SIP e tokens de call se houver suporte fora da plataforma Z-API',
+    'Meta AI quando existir método Baileys seguro',
+    'Mobile registration completo fora do QR Code/pairing code',
+    'Notas de chat Business quando o adapter suportar claramente',
+    'Persistência completa de configurações avançadas de fila',
+    'Compatibilidade literal com rotas Z-API somente se virar requisito explícito',
   ];
+  const activeDocLabel =
+    activeDocId === 'intro'
+      ? 'Introdução'
+      : activeDocId === 'roadmap'
+        ? 'Próximas funcionalidades'
+        : activeDoc?.title ?? 'Referência da API';
 
-  return (
-    <div className="grid gap-4 lg:grid-cols-[270px_minmax(0,1fr)_420px]">
-      <aside className="rounded-xl border border-[#2d3036] bg-[#111318] p-4 lg:sticky lg:top-[5.25rem] lg:max-h-[calc(100vh-6.5rem)] lg:overflow-y-auto">
+  function selectDoc(docId: string) {
+    setActiveDocId(docId);
+    setReferenceMenuOpen(false);
+  }
+
+  function renderReferenceNav() {
+    return (
+      <>
         <div className="mb-5">
-          <p className="text-xs font-semibold uppercase tracking-wide text-[#2edb5c]">API Reference</p>
-          <h2 className="mt-2 text-lg font-semibold">RavoxZap Public API</h2>
+          <p className="text-xs font-semibold uppercase tracking-wide text-[#2edb5c]">Referência da API</p>
+          <h2 className="mt-2 text-lg font-semibold">API Pública RavoxZap</h2>
           <p className="mt-1 text-sm text-gray-400">Rotas públicas reais para automações, CRMs e backends.</p>
         </div>
 
@@ -3288,7 +5727,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
                   ? 'border-[#2edb5c]/40 bg-[#12351f] text-[#2edb5c]'
                   : 'border-[#2d3036] bg-[#0d0f14] text-gray-300 hover:bg-[#1e2129] hover:text-white'
               }`}
-              onClick={() => setActiveDocId('intro')}
+              onClick={() => selectDoc('intro')}
             >
               <p className="font-medium">Introdução</p>
               <p className="mt-1 text-xs text-gray-500">Fluxo, autenticação e limites atuais.</p>
@@ -3308,7 +5747,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
                         ? 'border-[#2edb5c]/40 bg-[#12351f] text-[#2edb5c]'
                         : 'border-transparent text-gray-400 hover:border-[#2d3036] hover:bg-[#1e2129] hover:text-white'
                     }`}
-                    onClick={() => setActiveDocId(doc.id)}
+                    onClick={() => selectDoc(doc.id)}
                   >
                     <MethodBadge method={doc.method} />
                     <span className="min-w-0 text-wrap leading-snug">{doc.title}</span>
@@ -3327,37 +5766,108 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
                   ? 'border-[#2edb5c]/40 bg-[#12351f] text-[#2edb5c]'
                   : 'border-transparent text-gray-400 hover:border-[#2d3036] hover:bg-[#1e2129] hover:text-white'
               }`}
-              onClick={() => setActiveDocId('roadmap')}
+              onClick={() => selectDoc('roadmap')}
             >
               Próximas funcionalidades
             </button>
           </div>
         </div>
-      </aside>
+      </>
+    );
+  }
 
-      <article className="min-w-0 rounded-xl border border-[#2d3036] bg-[#181a21] p-5 lg:p-8">
+  return (
+    <div className="space-y-4">
+      <button
+        type="button"
+        className="flex w-full cursor-pointer items-center justify-between gap-3 rounded-xl border border-[#2d3036] bg-[#111318] px-4 py-3 text-left transition hover:bg-[#181a21] lg:hidden"
+        onClick={() => setReferenceMenuOpen(true)}
+      >
+        <span className="flex min-w-0 items-center gap-3">
+          <Menu size={18} className="shrink-0 text-[#2edb5c]" />
+          <span className="min-w-0">
+            <span className="block text-xs font-semibold uppercase tracking-wide text-[#2edb5c]">Referência da API</span>
+            <span className="block truncate text-sm text-gray-300">{activeDocLabel}</span>
+          </span>
+        </span>
+        <ChevronDown size={18} className="shrink-0 text-gray-500" />
+      </button>
+
+      {referenceMenuOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/70 p-3 backdrop-blur-sm lg:hidden"
+          onClick={() => setReferenceMenuOpen(false)}
+        >
+          <div
+            className="mx-auto mt-16 max-h-[calc(100dvh-5rem)] max-w-md overflow-hidden rounded-xl border border-[#2d3036] bg-[#111318] shadow-2xl"
+            onClick={event => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-[#2d3036] px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-white">Referência da API</p>
+                <p className="truncate text-xs text-gray-500">{activeDocLabel}</p>
+              </div>
+              <button
+                type="button"
+                className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-gray-400 transition hover:bg-[#181a21] hover:text-white"
+                onClick={() => setReferenceMenuOpen(false)}
+                aria-label="Fechar referência"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="themed-scrollbar max-h-[calc(100dvh-9rem)] overflow-y-auto p-4">
+              {renderReferenceNav()}
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div className="grid gap-4 lg:grid-cols-[270px_minmax(0,1fr)_420px]">
+        <aside className="themed-scrollbar hidden rounded-xl border border-[#2d3036] bg-[#111318] p-4 lg:sticky lg:top-[5.25rem] lg:block lg:max-h-[calc(100vh-6.5rem)] lg:overflow-y-auto">
+          {renderReferenceNav()}
+        </aside>
+
+        <article className="min-w-0 rounded-xl border border-[#2d3036] bg-[#181a21] p-5 lg:p-8">
         {activeDocId === 'intro' && (
           <section className="space-y-8">
             <div className="border-b border-[#2d3036] pb-8">
               <p className="text-xs font-semibold uppercase tracking-wide text-[#2edb5c]">Introdução</p>
               <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">RavoxZap Public API</h1>
               <p className="mt-3 max-w-3xl text-base leading-7 text-gray-400">
-                O RavoxZap expõe uma API pública para enviar mensagens, consultar conexão e ler conversas salvas.
-                Hoje o pacote funcional cobre texto, imagem, áudio, vídeo, documento, status, QR Code, restart, logout,
-                chats e mensagens.
+                O RavoxZap é um gateway/API multiusuário para WhatsApp via QR Code. Ele conecta uma instância WhatsApp,
+                recebe chamadas HTTP, coloca os comandos em fila e usa o worker Baileys para executar as ações no WhatsApp.
+                Hoje a API pública cobre mensagens básicas e avançadas, contatos, privacidade, perfil, status, chats,
+                grupos, comunidades, canais/newsletters, recursos Business, fila e operações assíncronas.
               </p>
             </div>
             <div className="grid gap-4 md:grid-cols-3">
               {[
-                ['1. API Key', 'Crie uma chave no painel e copie o token uma única vez.'],
-                ['2. Instância', 'Use o ID da instância conectada ao número do WhatsApp.'],
-                ['3. Fila e worker', 'A API enfileira; o worker envia pelo WhatsApp e atualiza o status.'],
+                ['1. Crie uma API Key', 'Gere uma chave no painel. O token aparece uma única vez e deve ser enviado como Bearer token.'],
+                ['2. Conecte uma instância', 'Leia o QR Code com o WhatsApp e use o ID da instância nas rotas públicas.'],
+                ['3. Envie comandos', 'A API valida escopo, salva o registro, enfileira o job e o worker executa no WhatsApp.'],
               ].map(([title, description]) => (
                 <div key={title} className="rounded-xl border border-[#2d3036] bg-[#111318] p-5">
                   <h2 className="font-semibold text-white">{title}</h2>
                   <p className="mt-2 text-sm leading-6 text-gray-400">{description}</p>
                 </div>
               ))}
+            </div>
+            <div>
+              <h2 className="text-2xl font-semibold">Quando usar</h2>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {[
+                  ['Automações internas', 'Enviar confirmações, avisos e atualizações a partir de CRMs, ERPs, n8n ou backends próprios.'],
+                  ['Atendimento operacional', 'Centralizar conversas recebidas, manter histórico e acionar webhooks por instância.'],
+                  ['Integrações com grupos', 'Criar grupos, sincronizar participantes e executar ações administrativas quando a instância tiver permissão.'],
+                  ['Prototipação rápida', 'Testar fluxos de mensagem sem depender de uma conta oficial da Meta no primeiro MVP.'],
+                ].map(([title, description]) => (
+                  <div key={title} className="rounded-xl border border-[#2d3036] bg-[#111318] p-5">
+                    <h3 className="font-semibold text-white">{title}</h3>
+                    <p className="mt-2 text-sm leading-6 text-gray-400">{description}</p>
+                  </div>
+                ))}
+              </div>
             </div>
             <div>
               <h2 className="text-2xl font-semibold">Autenticação</h2>
@@ -3367,9 +5877,49 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
               </div>
             </div>
             <div>
+              <h2 className="text-2xl font-semibold">Formato do telefone</h2>
+              <p className="mt-2 max-w-3xl text-gray-400">
+                Em todos os endpoints de envio, o campo <code className="rounded bg-[#0d0f14] px-1.5 py-0.5 text-gray-200">to</code> deve ser enviado em formato internacional.
+                Para números do Brasil, use <strong className="font-semibold text-gray-200">+55 + DDD + número</strong>.
+              </p>
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div className="rounded-xl border border-[#2d3036] bg-[#111318] p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Recomendado</p>
+                  <code className="mt-2 block break-all text-sm text-[#2edb5c]">{`"to": "+5585999999999"`}</code>
+                </div>
+                <div className="rounded-xl border border-[#2d3036] bg-[#111318] p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Também aceito</p>
+                  <code className="mt-2 block break-all text-sm text-gray-300">{`"to": "5585999999999"`}</code>
+                </div>
+              </div>
+            </div>
+            <div>
               <h2 className="text-2xl font-semibold">Fluxo</h2>
               <div className="mt-4 rounded-xl border border-[#2d3036] bg-[#111318] p-5 font-mono text-sm text-gray-300">
                 API pública → valida token e escopo → salva mídia local quando existir → cria mensagem → BullMQ → Worker → Baileys → WhatsApp
+              </div>
+            </div>
+            <div>
+              <h2 className="text-2xl font-semibold">Boas práticas</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-gray-400">
+                Recomendações rápidas para integrar com previsibilidade e evitar falhas comuns.
+              </p>
+              <div className="mt-4 divide-y divide-[#2d3036] rounded-xl border border-[#2d3036] bg-[#111318]">
+                {[
+                  ['Consulte o status', 'Use GET /status antes de enviar para confirmar se a instância está conectada.'],
+                  ['Use telefone internacional', 'Para Brasil, envie +55 + DDD + número. Também aceitamos somente dígitos.'],
+                  ['Acompanhe retornos assíncronos', 'Envios e operações retornam QUEUED; consulte mensagens, status ou operação para confirmar o resultado.'],
+                  ['Configure webhooks', 'Use webhooks por instância para receber eventos de mensagens, conexão e falhas no seu sistema.'],
+                  ['Proteja a API Key', 'Crie uma chave por integração e revogue quando ela não for mais usada.'],
+                ].map(([title, description]) => (
+                  <div key={title} className="grid gap-2 p-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                    <div className="flex items-center gap-2 font-semibold text-white">
+                      <Check className="text-[#2edb5c]" size={16} />
+                      {title}
+                    </div>
+                    <p className="text-sm leading-6 text-gray-400">{description}</p>
+                  </div>
+                ))}
               </div>
             </div>
             <div>
@@ -3384,6 +5934,26 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
                   <div key={label} className="flex items-center justify-between rounded-lg border border-[#2d3036] bg-[#111318] p-4">
                     <span className="text-gray-300">{label}</span>
                     <span className="font-mono text-[#2edb5c]">{value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h2 className="text-2xl font-semibold">Checklist rápido</h2>
+              <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  'Postgres e Redis rodando',
+                  'Worker ativo',
+                  'Instância CONNECTED',
+                  'API Key ativa',
+                  'Telefone com DDI',
+                  'Payload JSON válido',
+                  'Webhook testado',
+                  'Logs monitorados',
+                ].map(item => (
+                  <div key={item} className="flex items-center gap-2 rounded-lg border border-[#2d3036] bg-[#111318] p-3 text-sm text-gray-300">
+                    <CheckCircle2 size={16} className="shrink-0 text-[#2edb5c]" />
+                    <span>{item}</span>
                   </div>
                 ))}
               </div>
@@ -3424,7 +5994,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
 
             <section className="space-y-8">
               <div>
-                <h2 className="text-2xl font-semibold">Authentication</h2>
+                <h2 className="text-2xl font-semibold">Autenticação</h2>
                 <p className="mt-2 text-gray-400">Envie a API Key no header de autorização em todas as chamadas públicas.</p>
                 <div className="mt-4">
                   <CodeSnippet>{`Authorization: Bearer ravox_live_xxxxx`}</CodeSnippet>
@@ -3432,18 +6002,81 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
               </div>
 
               <div>
-                <h2 className="text-2xl font-semibold">Path parameters</h2>
+                <h2 className="text-2xl font-semibold">Parâmetros de rota</h2>
                 <div className="mt-4 rounded-xl border border-[#2d3036]">
                   <div className="grid gap-3 border-b border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
                     <code className="text-gray-200">instanceId</code>
                     <span className="text-gray-500">string</span>
                     <span className="text-gray-400">ID da instância WhatsApp que pertence à API Key.</span>
                   </div>
-                  {activeDoc.id === 'messages' && (
-                    <div className="grid gap-3 p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
+                  {activeDoc.path.includes(exampleChatId) && (
+                    <div className="grid gap-3 border-t border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
                       <code className="text-gray-200">chatId</code>
                       <span className="text-gray-500">string</span>
                       <span className="text-gray-400">ID do chat retornado em listar chats.</span>
+                    </div>
+                  )}
+                  {activeDoc.id.startsWith('group-') && !activeDoc.id.startsWith('group-invite-') && (
+                    <div className="grid gap-3 border-t border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
+                      <code className="text-gray-200">groupId</code>
+                      <span className="text-gray-500">string</span>
+                      <span className="text-gray-400">ID interno do grupo ou remoteJid terminado em @g.us.</span>
+                    </div>
+                  )}
+                  {activeDoc.id === 'operations' && (
+                    <div className="grid gap-3 border-t border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
+                      <code className="text-gray-200">operationId</code>
+                      <span className="text-gray-500">string</span>
+                      <span className="text-gray-400">ID retornado por uma ação assíncrona.</span>
+                    </div>
+                  )}
+                  {activeDoc.path.includes(examplePhone) && (
+                    <div className="grid gap-3 border-t border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
+                      <code className="text-gray-200">phone</code>
+                      <span className="text-gray-500">string</span>
+                      <span className="text-gray-400">Telefone em formato internacional, com ou sem sinal de +.</span>
+                    </div>
+                  )}
+                  {activeDoc.path.includes(exampleCommunityId) && (
+                    <div className="grid gap-3 border-t border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
+                      <code className="text-gray-200">communityId</code>
+                      <span className="text-gray-500">string</span>
+                      <span className="text-gray-400">RemoteJid da comunidade retornado pelo WhatsApp.</span>
+                    </div>
+                  )}
+                  {activeDoc.path.includes(exampleNewsletterId) && (
+                    <div className="grid gap-3 border-t border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
+                      <code className="text-gray-200">newsletterId</code>
+                      <span className="text-gray-500">string</span>
+                      <span className="text-gray-400">JID do canal/newsletter, normalmente terminado em @newsletter.</span>
+                    </div>
+                  )}
+                  {activeDoc.path.includes(exampleProductId) && (
+                    <div className="grid gap-3 border-t border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
+                      <code className="text-gray-200">productId</code>
+                      <span className="text-gray-500">string</span>
+                      <span className="text-gray-400">ID do produto retornado pelo catálogo Business.</span>
+                    </div>
+                  )}
+                  {activeDoc.path.includes(exampleTagId) && (
+                    <div className="grid gap-3 border-t border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
+                      <code className="text-gray-200">tagId</code>
+                      <span className="text-gray-500">string</span>
+                      <span className="text-gray-400">ID da etiqueta Business.</span>
+                    </div>
+                  )}
+                  {activeDoc.path.includes(exampleQueueItemId) && (
+                    <div className="grid gap-3 border-t border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
+                      <code className="text-gray-200">queueItemId</code>
+                      <span className="text-gray-500">string</span>
+                      <span className="text-gray-400">ID do job retornado pela fila.</span>
+                    </div>
+                  )}
+                  {(activeDoc.id === 'group-invite-metadata' || activeDoc.id === 'group-invite-metadata-get') && (
+                    <div className="grid gap-3 border-t border-[#2d3036] p-4 text-sm sm:grid-cols-[180px_120px_minmax(0,1fr)]">
+                      <code className="text-gray-200">code</code>
+                      <span className="text-gray-500">string</span>
+                      <span className="text-gray-400">Código do convite do grupo.</span>
                     </div>
                   )}
                 </div>
@@ -3451,7 +6084,13 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
 
               {activeDoc.requestBody && (
                 <div>
-                  <h2 className="text-2xl font-semibold">Request body</h2>
+                  <h2 className="text-2xl font-semibold">Corpo da requisição</h2>
+                  {activeDoc.group === 'Mensagens' && (
+                    <p className="mt-2 text-sm text-gray-400">
+                      O campo <code className="rounded bg-[#0d0f14] px-1.5 py-0.5 text-gray-200">to</code> usa telefone internacional.
+                      Exemplo Brasil: <code className="rounded bg-[#0d0f14] px-1.5 py-0.5 text-gray-200">+5585999999999</code>.
+                    </p>
+                  )}
                   <div className="mt-4">
                     <DocsCodeBlock title="application/json" code={activeDoc.requestBody} />
                   </div>
@@ -3459,7 +6098,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
               )}
 
               <div>
-                <h2 className="text-2xl font-semibold">Response</h2>
+                <h2 className="text-2xl font-semibold">Resposta</h2>
                 <div className="mt-4">
                   <DocsCodeBlock title="200 Success" code={activeDoc.responseBody} />
                 </div>
@@ -3503,12 +6142,12 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
         )}
       </article>
 
-      <aside className="min-w-0 rounded-xl border border-[#2d3036] bg-[#111318] p-4 lg:sticky lg:top-[5.25rem] lg:max-h-[calc(100vh-6.5rem)] lg:overflow-y-auto">
+      <aside className="themed-scrollbar min-w-0 rounded-xl border border-[#2d3036] bg-[#111318] p-4 lg:sticky lg:top-[5.25rem] lg:max-h-[calc(100vh-6.5rem)] lg:overflow-y-auto">
         <div className="space-y-4">
-          {activeDoc ? (
+                  {activeDoc ? (
             <>
               <DocsCodeBlock title="cURL" code={activeDoc.curl} />
-              <DocsCodeBlock title="Response" code={activeDoc.responseBody} />
+              <DocsCodeBlock title="Resposta" code={activeDoc.responseBody} />
               <DocsCodeBlock title="Webhook payload" code={webhookPayload} />
             </>
           ) : (
@@ -3516,7 +6155,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
               <div className="rounded-xl border border-[#2d3036] bg-[#0d0f14] p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Funcional hoje</p>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  {['texto', 'imagem', 'áudio', 'vídeo', 'documento', 'status', 'qr code', 'chats'].map(item => (
+                  {['mensagens', 'mídia', 'contatos', 'privacidade', 'perfil', 'status', 'chats', 'grupos', 'comunidades', 'newsletters', 'business', 'fila', 'operações'].map(item => (
                     <span key={item} className="rounded-full border border-[#2d3036] px-3 py-1 text-xs text-gray-300">{item}</span>
                   ))}
                 </div>
@@ -3530,6 +6169,7 @@ function DocsView({ selectedInstance }: { selectedInstance?: WhatsAppInstance })
           </div>
         </div>
       </aside>
+    </div>
     </div>
   );
 }
@@ -3548,7 +6188,6 @@ function DashboardBreadcrumbs({
   const viewLabels: Record<DashboardView, string> = {
     dashboard: 'Dashboard',
     instances: 'Instâncias',
-    chats: 'Conversas',
     'api-keys': 'API Keys',
     docs: 'Docs',
   };
@@ -3590,12 +6229,10 @@ function DashboardBreadcrumbs({
 }
 
 function PublicDocsPage() {
-  const authenticated = Boolean(getToken());
-
   return (
     <main className="min-h-screen bg-[#111318] text-gray-100">
       <header className="sticky top-0 z-40 border-b border-[#2d3036] bg-[#0b0c11]/95 backdrop-blur">
-        <div className="mx-auto flex h-16 max-w-[1760px] items-center justify-between gap-4 px-4 md:px-8">
+        <div className="mx-auto flex h-16 max-w-[1760px] items-center px-4 md:px-8">
           <div className="flex min-w-0 items-center gap-3">
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[#2edb5c] text-[#0b0c11]">
               <MessageSquareText size={20} />
@@ -3605,16 +6242,6 @@ function PublicDocsPage() {
               <span className="block truncate text-xs text-gray-500">API pública para integrações</span>
             </div>
           </div>
-          <button
-            type="button"
-            className="h-9 cursor-pointer rounded-md border border-[#2d3036] px-3 text-sm text-gray-200 transition hover:bg-[#181a21] hover:text-white"
-            onClick={() => {
-              window.history.pushState({}, '', authenticated ? '/dashboard' : '/login');
-              window.dispatchEvent(new Event('ravox-route-change'));
-            }}
-          >
-            {authenticated ? 'Voltar ao painel' : 'Entrar'}
-          </button>
         </div>
       </header>
 
@@ -3740,14 +6367,6 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
               routeInstanceId={route.instanceId}
               routeInstanceTab={route.instanceTab}
               navigate={navigate}
-            />
-          )}
-          {view === 'chats' && (
-            <ChatsView
-              organizationId={organizations[0]?.id ?? ''}
-              instances={instances.data ?? []}
-              selectedInstance={selectedInstance}
-              setSelectedInstanceId={setSelectedInstanceId}
             />
           )}
           {view === 'api-keys' && <ApiKeysView organizations={organizations} />}
