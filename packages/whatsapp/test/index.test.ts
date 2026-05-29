@@ -26,6 +26,15 @@ describe('chooseIncomingChatRemoteJid', () => {
     ).toBe('120363424804348891@g.us');
   });
 
+  it('keeps the group JID when Baileys puts the participant in remoteJid and the group in aliases', () => {
+    expect(
+      chooseIncomingChatRemoteJid(
+        ['5585988532761@s.whatsapp.net', '120363424804348891@g.us'],
+        '5585988532761@s.whatsapp.net',
+      ),
+    ).toBe('120363424804348891@g.us');
+  });
+
   it('uses the phone JID for a direct message when available', () => {
     expect(
       chooseIncomingChatRemoteJid(

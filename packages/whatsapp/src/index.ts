@@ -208,12 +208,14 @@ function normalizePnJid(value: string): string {
 
 export function chooseIncomingChatRemoteJid(values: string[], fallbackJid: string): string {
   const normalizedFallback = normalizePnJid(fallbackJid);
+  const normalizedValues = values.map(normalizePnJid);
+  const groupJid = normalizedValues.find(jid => jid.endsWith('@g.us'));
 
-  if (normalizedFallback.endsWith('@g.us')) {
-    return normalizedFallback;
+  if (groupJid) {
+    return groupJid;
   }
 
-  return values.map(normalizePnJid).find(jid => jid.endsWith('@s.whatsapp.net')) ?? normalizedFallback;
+  return normalizedValues.find(jid => jid.endsWith('@s.whatsapp.net')) ?? normalizedFallback;
 }
 
 function isLidJid(value: string): boolean {
@@ -952,7 +954,7 @@ export class WhatsAppConnectionManager {
     if (dataUrlMatch) {
       const buffer = Buffer.from(dataUrlMatch[1] ?? '', 'base64');
       if (!buffer.length) throw new Error('A imagem do grupo está vazia.');
-      return { buffer };
+      return buffer;
     }
 
     if (/^https?:\/\//i.test(trimmed)) {
@@ -961,7 +963,7 @@ export class WhatsAppConnectionManager {
 
     const buffer = Buffer.from(trimmed, 'base64');
     if (!buffer.length) throw new Error('A imagem do grupo deve ser uma URL, data URL ou base64.');
-    return { buffer };
+    return buffer;
   }
 
   private async loadMediaSource(source: string) {
@@ -971,7 +973,7 @@ export class WhatsAppConnectionManager {
     if (dataUrlMatch) {
       const buffer = Buffer.from(dataUrlMatch[1] ?? '', 'base64');
       if (!buffer.length) throw new Error('A mídia está vazia.');
-      return { buffer };
+      return buffer;
     }
 
     if (/^https?:\/\//i.test(trimmed)) {
@@ -980,7 +982,7 @@ export class WhatsAppConnectionManager {
 
     const buffer = Buffer.from(trimmed, 'base64');
     if (!buffer.length) throw new Error('A mídia deve ser uma URL, data URL ou base64.');
-    return { buffer };
+    return buffer;
   }
 
   private normalizeExistingGroupParticipantJids(participants: string[]) {
