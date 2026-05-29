@@ -5218,6 +5218,32 @@ ${headers}`;
 }`,
     }),
     autoDoc({
+      id: 'contacts-list',
+      group: 'Contatos',
+      method: 'GET',
+      title: 'Listar contatos',
+      path: `/v1/instances/${exampleInstanceId}/contacts`,
+      description: 'Lista contatos salvos no cache local da organização da API Key.',
+      responseBody: `[
+  {
+    "id": "contact_123",
+    "organizationId": "org_123",
+    "name": "Cliente",
+    "ddi": "55",
+    "ddd": "85",
+    "number": "999999999",
+    "phoneE164": "${examplePhone}",
+    "remoteJid": "${examplePhone}@s.whatsapp.net",
+    "createdAt": "2026-05-29T13:00:00.000Z",
+    "updatedAt": "2026-05-29T13:00:00.000Z"
+  }
+]`,
+      notes: [
+        'Esta rota lista o cache local do RavoxZap, não a agenda completa do aparelho.',
+        'O Baileys não expõe uma busca confiável de toda a lista de contatos do celular; use salvar contato, importar pelo seu CRM ou capturar contatos conforme eles interagem.',
+      ],
+    }),
+    autoDoc({
       id: 'contacts-add',
       group: 'Contatos',
       method: 'POST',

@@ -2168,6 +2168,16 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
     return enqueuePublicOperation(request, 'CONTACT_CHECK_BATCH', body);
   });
 
+  app.get('/v1/instances/:instanceId/contacts', async request => {
+    const { apiKey } = await getPublicInstance(request);
+    const contacts = await prisma.contact.findMany({
+      where: { organizationId: apiKey.organizationId },
+      orderBy: [{ name: 'asc' }, { createdAt: 'desc' }],
+    });
+
+    return contacts.map(publicContact);
+  });
+
   app.post('/v1/instances/:instanceId/contacts', async request => {
     const body = parseBody(request, z.object({ phone: z.string().min(3), name: z.string().min(1).max(180) }));
     return enqueuePublicOperation(request, 'CONTACT_ADD', body);
