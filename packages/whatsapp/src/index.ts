@@ -6,6 +6,7 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   useMultiFileAuthState,
+  type AuthenticationState,
   type WASocket,
 } from '@whiskeysockets/baileys';
 import { spawn } from 'node:child_process';
@@ -64,6 +65,10 @@ export type WhatsAppConnectionCallbacks = {
 export type ConnectInstanceInput = {
   instanceId: string;
   sessionBasePath: string;
+  authState?: {
+    state: AuthenticationState;
+    saveCreds: () => Promise<void>;
+  };
   callbacks?: WhatsAppConnectionCallbacks;
 };
 
@@ -727,9 +732,11 @@ export class WhatsAppConnectionManager {
 
   private async createConnection(input: ConnectInstanceInput): Promise<ConnectInstanceResult> {
     const sessionPath = getSessionPath(input.sessionBasePath, input.instanceId);
-    await mkdir(sessionPath, { recursive: true });
-
-    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+    const authState = input.authState ?? await (async () => {
+      await mkdir(sessionPath, { recursive: true });
+      return useMultiFileAuthState(sessionPath);
+    })();
+    const { state, saveCreds } = authState;
     const { version } = await fetchLatestBaileysVersion();
 
     return new Promise((resolve, reject) => {
@@ -1159,22 +1166,22 @@ export class WhatsAppConnectionManager {
     const media =
       input.type === 'AUDIO'
         ? {
-            buffer: await transcodeAudioToWhatsAppVoice(input.path),
+            source: await transcodeAudioToWhatsAppVoice(input.path),
             mimeType: 'audio/ogg; codecs=opus',
           }
         : {
-            buffer: await readFile(input.path),
+            source: /^https?:\/\//i.test(input.path) ? { url: input.path } : await readFile(input.path),
             mimeType: input.mimeType,
           };
     const result = await socket.sendMessage(sendJid, {
       ...(input.type === 'IMAGE'
-        ? { image: media.buffer, caption: input.caption }
+        ? { image: media.source, caption: input.caption }
         : input.type === 'VIDEO'
-          ? { video: media.buffer, caption: input.caption, mimetype: media.mimeType }
+          ? { video: media.source, caption: input.caption, mimetype: media.mimeType }
           : input.type === 'AUDIO'
-            ? { audio: media.buffer, mimetype: media.mimeType, ptt: true }
+            ? { audio: media.source, mimetype: media.mimeType, ptt: true }
             : {
-                document: media.buffer,
+                document: media.source,
                 mimetype: media.mimeType,
                 fileName: input.fileName,
                 caption: input.caption,

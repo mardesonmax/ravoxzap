@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { nanoid } from 'nanoid';
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
 
@@ -15,6 +14,7 @@ import {
 import type { Env } from '@ravoxzap/config';
 import { prisma } from '@ravoxzap/database';
 import type { RavoxQueues } from '@ravoxzap/queue';
+import { createMediaStorage } from '@ravoxzap/storage';
 import {
   createApiKeySchema,
   createContactSchema,
@@ -225,6 +225,7 @@ const sendFileFieldsSchema = z.object({
   body: z.string().max(1024).optional(),
 });
 const mediaStoragePath = path.resolve(process.cwd(), '../../storage/media');
+let mediaStorage: ReturnType<typeof createMediaStorage>;
 const publicMediaLimits = {
   IMAGE: 15 * 1024 * 1024,
   AUDIO: 20 * 1024 * 1024,
@@ -434,6 +435,7 @@ function serializeChat(chat: {
     fromMe: boolean;
     status: string;
     mediaUrl?: string | null;
+    mediaExpiresAt?: Date | null;
     createdAt: Date;
   }>;
 }) {
@@ -447,6 +449,7 @@ function serializeChat(chat: {
     updatedAt: chat.updatedAt.toISOString(),
     messages: chat.messages?.map(message => ({
       ...message,
+      mediaExpiresAt: message.mediaExpiresAt?.toISOString() ?? null,
       createdAt: message.createdAt.toISOString(),
     })),
   };
@@ -570,6 +573,21 @@ async function dispatchWebhookEvent(
 }
 
 export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: Env) {
+  mediaStorage = createMediaStorage({
+    disk: env.DISK,
+    mode: env.MEDIA_STORAGE_MODE,
+    retentionDays: env.MEDIA_RETENTION_DAYS,
+    localRoot: mediaStoragePath,
+    storageBaseUrl: env.STORAGE_BASE_URL,
+    r2: {
+      endpoint: env.R2_ENDPOINT,
+      region: env.R2_REGION,
+      bucket: env.R2_BUCKET,
+      accessKeyId: env.R2_ACCESS_KEY_ID,
+      secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+    },
+  });
+
   async function getPublicInstance(request: FastifyRequest) {
     const apiKey = await authenticateApiKey(request, env.API_KEY_SECRET);
     const { instanceId } = parseParams(request, instanceIdParamsSchema);
@@ -1476,12 +1494,16 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
     const type = messageTypeFromMime(file.mimeType);
     const extension = extensionFromFile(file.fileName, file.mimeType);
     const fileName = `${randomUUID()}.${extension}`;
-    const instanceMediaPath = path.join(mediaStoragePath, instance.id);
-    const absolutePath = path.join(instanceMediaPath, fileName);
-    const mediaUrl = `/media/${instance.id}/${fileName}`;
+    const savedMedia = await mediaStorage.save({
+      instanceId: instance.id,
+      fileName,
+      bytes: file.buffer,
+      mimeType: file.mimeType,
+    });
 
-    await mkdir(instanceMediaPath, { recursive: true });
-    await writeFile(absolutePath, file.buffer);
+    if (!savedMedia) {
+      throw new AppError('MEDIA_STORAGE_MODE=metadata_only requires media to be sent by URL.', 422, 'MEDIA_ARCHIVE_DISABLED');
+    }
 
     const chat = await prisma.chat.upsert({
       where: {
@@ -1509,7 +1531,8 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
         fromMe: true,
         type,
         body,
-        mediaUrl,
+        mediaUrl: savedMedia.mediaUrl,
+        mediaExpiresAt: savedMedia.mediaExpiresAt,
         status: 'QUEUED',
       },
     });
@@ -1522,7 +1545,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
       body,
       type,
       media: {
-        path: absolutePath,
+        path: savedMedia.mediaPath,
         mimeType: file.mimeType,
         fileName: file.fileName,
       },
@@ -1548,6 +1571,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
             fromMe: true,
             status: true,
             mediaUrl: true,
+            mediaExpiresAt: true,
             createdAt: true,
           },
         },
@@ -1575,6 +1599,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
             fromMe: true,
             status: true,
             mediaUrl: true,
+            mediaExpiresAt: true,
             createdAt: true,
           },
         },
@@ -1849,20 +1874,34 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
     fileName?: string;
   }) {
     const { apiKey, instanceId } = await getPublicInstance(input.request);
-    const media = await loadPublicMedia({
-      source: input.source,
-      type: input.type,
-      fileName: input.fileName,
-    });
     const remoteJid = remoteJidFromPhone(input.to);
+    const isUrlSource = /^https?:\/\//i.test(input.source.trim());
+    const media = isUrlSource
+      ? {
+          buffer: Buffer.alloc(0),
+          mimeType: publicMediaFallbackMime[input.type],
+          fileName: input.fileName ?? (path.basename(new URL(input.source).pathname) || `media.${extensionFromFile('', publicMediaFallbackMime[input.type])}`),
+        }
+      : await loadPublicMedia({
+          source: input.source,
+          type: input.type,
+          fileName: input.fileName,
+        });
     const extension = extensionFromFile(media.fileName, media.mimeType);
-    const storedFileName = `${randomUUID()}.${extension}`;
-    const instanceMediaPath = path.join(mediaStoragePath, instanceId);
-    const absolutePath = path.join(instanceMediaPath, storedFileName);
-    const mediaUrl = `/media/${instanceId}/${storedFileName}`;
+    const savedMedia = isUrlSource
+      ? undefined
+      : await mediaStorage.save({
+          instanceId,
+          fileName: `${randomUUID()}.${extension}`,
+          bytes: media.buffer,
+          mimeType: media.mimeType,
+        });
 
-    await mkdir(instanceMediaPath, { recursive: true });
-    await writeFile(absolutePath, media.buffer);
+    if (!isUrlSource && !savedMedia) {
+      throw new AppError('MEDIA_STORAGE_MODE=metadata_only requires media to be sent by URL.', 422, 'MEDIA_ARCHIVE_DISABLED');
+    }
+    const mediaUrl = isUrlSource ? input.source.trim() : savedMedia?.mediaUrl;
+    const mediaPath = isUrlSource ? input.source.trim() : savedMedia?.mediaPath;
 
     const chat = await prisma.chat.upsert({
       where: {
@@ -1890,6 +1929,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
         type: input.type,
         body,
         mediaUrl,
+        mediaExpiresAt: savedMedia?.mediaExpiresAt,
         status: 'QUEUED',
       },
     });
@@ -1902,7 +1942,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
       body,
       type: input.type,
       media: {
-        path: absolutePath,
+        path: mediaPath ?? input.source.trim(),
         mimeType: media.mimeType,
         fileName: media.fileName,
       },
@@ -1913,6 +1953,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
       status: message.status,
       type: message.type,
       mediaUrl,
+      mediaExpiresAt: savedMedia?.mediaExpiresAt?.toISOString() ?? null,
     };
   }
 
@@ -2867,6 +2908,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
             fromMe: true,
             status: true,
             mediaUrl: true,
+            mediaExpiresAt: true,
             createdAt: true,
           },
         },
@@ -2893,6 +2935,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
             fromMe: true,
             status: true,
             mediaUrl: true,
+            mediaExpiresAt: true,
             createdAt: true,
           },
         },

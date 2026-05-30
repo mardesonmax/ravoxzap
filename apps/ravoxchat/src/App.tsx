@@ -5,6 +5,7 @@ import {
   Check,
   ChevronDown,
   Edit3,
+  Mic,
   MessageSquareText,
   MoreVertical,
   Pin,
@@ -12,6 +13,7 @@ import {
   Search,
   Send,
   Server,
+  Square,
   Trash2,
   Users,
   X,
@@ -68,6 +70,12 @@ type Draft = {
 };
 
 const emptyDraft: Draft = { body: '', file: null };
+
+function formatRecorderTime(seconds: number) {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}:${String(remainingSeconds).padStart(2, '0')}`;
+}
 
 function emptyConnectionForm(baseUrl = 'http://localhost:3334'): ConnectionFormState {
   return {
@@ -543,6 +551,34 @@ function ChatPane({
   const [menuOpen, setMenuOpen] = useState(false);
   const [saveContactOpen, setSaveContactOpen] = useState(false);
   const [contactName, setContactName] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [recordingError, setRecordingError] = useState('');
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingChunksRef = useRef<BlobPart[]>([]);
+  const recordingTimerRef = useRef<number | null>(null);
+  const discardRecordingRef = useRef(false);
+
+  function clearRecordingTimer() {
+    if (recordingTimerRef.current !== null) {
+      window.clearInterval(recordingTimerRef.current);
+      recordingTimerRef.current = null;
+    }
+  }
+
+  function cleanupRecordingStream() {
+    recordingStreamRef.current?.getTracks().forEach(track => track.stop());
+    recordingStreamRef.current = null;
+  }
+
+  useEffect(() => () => {
+    clearRecordingTimer();
+    cleanupRecordingStream();
+    if (mediaRecorderRef.current?.state === 'recording') {
+      mediaRecorderRef.current.stop();
+    }
+  }, []);
 
   if (!selected) {
     return (
@@ -558,7 +594,75 @@ function ChatPane({
 
   function submit(event: FormEvent) {
     event.preventDefault();
+    if (isRecording) return;
     if (canSend) onSend();
+  }
+
+  async function startRecording() {
+    setRecordingError('');
+
+    if (!navigator.mediaDevices?.getUserMedia || !globalThis.MediaRecorder) {
+      setRecordingError('Gravacao de audio nao esta disponivel neste navegador.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const preferredMimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : '';
+      const recorder = preferredMimeType ? new MediaRecorder(stream, { mimeType: preferredMimeType }) : new MediaRecorder(stream);
+
+      recordingStreamRef.current = stream;
+      recordingChunksRef.current = [];
+      discardRecordingRef.current = false;
+      mediaRecorderRef.current = recorder;
+
+      recorder.addEventListener('dataavailable', event => {
+        if (event.data.size > 0) recordingChunksRef.current.push(event.data);
+      });
+
+      recorder.addEventListener('stop', () => {
+        clearRecordingTimer();
+        cleanupRecordingStream();
+        setIsRecording(false);
+
+        const chunks = recordingChunksRef.current;
+        recordingChunksRef.current = [];
+        if (discardRecordingRef.current || chunks.length === 0) return;
+
+        const mimeType = recorder.mimeType || 'audio/webm';
+        const extension = mimeType.includes('ogg') ? 'ogg' : 'webm';
+        const blob = new Blob(chunks, { type: mimeType });
+        const file = new File([blob], `audio-${Date.now()}.${extension}`, { type: mimeType });
+        onDraftChange({ file, body: '' });
+      });
+
+      recorder.start();
+      setRecordingSeconds(0);
+      setIsRecording(true);
+      recordingTimerRef.current = window.setInterval(() => {
+        setRecordingSeconds(seconds => seconds + 1);
+      }, 1000);
+    } catch (error) {
+      cleanupRecordingStream();
+      setIsRecording(false);
+      setRecordingError(error instanceof Error ? error.message : 'Nao foi possivel acessar o microfone.');
+    }
+  }
+
+  function stopRecording(discard = false) {
+    discardRecordingRef.current = discard;
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') {
+      recorder.stop();
+      return;
+    }
+    clearRecordingTimer();
+    cleanupRecordingStream();
+    setIsRecording(false);
   }
 
   const contactPhone = jidToPhone(selected.remoteJid);
@@ -669,12 +773,33 @@ function ChatPane({
           <button type="button" className="flex h-10 w-10 cursor-pointer items-center justify-center rounded-full text-gray-200 transition hover:bg-[#2a2d2b]" onClick={() => fileInputRef.current?.click()}>
             <Plus size={24} />
           </button>
-          <input value={draft.body} onChange={event => onDraftChange({ body: event.target.value })} className="h-10 min-w-0 flex-1 bg-transparent px-1 text-gray-100 outline-none placeholder:text-gray-500" placeholder={draft.file ? 'Legenda opcional' : 'Digite uma mensagem'} />
-          <button type="submit" className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-full bg-[#2edb5c] text-[#0b0c11] transition hover:bg-[#25c452] disabled:cursor-not-allowed disabled:opacity-50" disabled={!canSend || pending}>
-            <Send size={20} />
-          </button>
+          {isRecording ? (
+            <div className="flex min-w-0 flex-1 items-center gap-3 px-1 text-sm">
+              <span className="h-2.5 w-2.5 shrink-0 animate-pulse rounded-full bg-red-400" />
+              <span className="font-mono text-red-200">{formatRecorderTime(recordingSeconds)}</span>
+              <span className="min-w-0 flex-1 truncate text-gray-300">Gravando audio</span>
+              <button type="button" className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full text-gray-300 transition hover:bg-[#2a2d2b] hover:text-white" onClick={() => stopRecording(true)} aria-label="Cancelar audio">
+                <X size={18} />
+              </button>
+            </div>
+          ) : (
+            <input value={draft.body} onChange={event => onDraftChange({ body: event.target.value })} className="h-10 min-w-0 flex-1 bg-transparent px-1 text-gray-100 outline-none placeholder:text-gray-500" placeholder={draft.file ? 'Legenda opcional' : 'Digite uma mensagem'} />
+          )}
+          {isRecording ? (
+            <button type="button" className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-full bg-[#2edb5c] text-[#0b0c11] transition hover:bg-[#25c452]" onClick={() => stopRecording()} aria-label="Finalizar audio">
+              <Square size={18} fill="currentColor" />
+            </button>
+          ) : canSend ? (
+            <button type="submit" className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-full bg-[#2edb5c] text-[#0b0c11] transition hover:bg-[#25c452] disabled:cursor-not-allowed disabled:opacity-50" disabled={!canSend || pending}>
+              <Send size={20} />
+            </button>
+          ) : (
+            <button type="button" className="flex h-11 w-11 cursor-pointer items-center justify-center rounded-full bg-[#2edb5c] text-[#0b0c11] transition hover:bg-[#25c452] disabled:cursor-not-allowed disabled:opacity-50" onClick={() => void startRecording()} disabled={pending} aria-label="Gravar audio">
+              <Mic size={20} />
+            </button>
+          )}
         </div>
-        {error && <p className="mt-2 text-sm text-red-300">{error}</p>}
+        {(error || recordingError) && <p className="mt-2 text-sm text-red-300">{error || recordingError}</p>}
       </form>
       {saveContactOpen && (
         <Modal title={selected.contact ? 'Editar contato' : 'Salvar contato'} onClose={() => setSaveContactOpen(false)}>

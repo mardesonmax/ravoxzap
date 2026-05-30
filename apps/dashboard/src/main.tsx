@@ -4177,7 +4177,7 @@ ${headers}`;
       responseBody: operationResponse,
       notes: [
         'Rotas que retornam operationId são assíncronas: consulte GET /operations/:operationId para obter SUCCESS, FAILED e result.',
-        'A execução depende da instância conectada, das permissões reais no WhatsApp e do suporte atual do adapter Baileys.',
+        'A execução depende da instância conectada, das permissões reais no WhatsApp e dos recursos disponíveis na conta.',
       ],
       ...input,
       curl: input.curl ?? autoCurl(input.method, input.path, input.requestBody),
@@ -4910,7 +4910,7 @@ ${headers}`;
   -H "Authorization: Bearer ravox_live_xxxxx" \\
   -H "Content-Type: application/json" \\
   -d '{"text":"Veja também o grupo relacionado","groups":["120363000000000000@g.us"]}'`,
-      notes: ['Depende de suporte do WhatsApp/Baileys para groupMentions.', 'A operação falha se o envio não for aceito pelo adapter.'],
+      notes: ['Depende dos recursos disponíveis para menções de grupos na conta conectada.', 'A operação falha se o envio não for aceito pelo WhatsApp.'],
     },
     {
       id: 'group-leave',
@@ -5227,8 +5227,8 @@ ${headers}`;
   }
 ]`,
       notes: [
-        'Esta rota lista o cache local do RavoxZap, não a agenda completa do aparelho.',
-        'O Baileys não expõe uma busca confiável de toda a lista de contatos do celular; use salvar contato, importar pelo seu CRM ou capturar contatos conforme eles interagem.',
+        'Esta rota lista os contatos conhecidos pela API.',
+        'Para completar a base, use salvar contato, importe contatos pelo seu CRM ou capture contatos conforme eles interagem com a instância.',
       ],
     }),
     autoDoc({
@@ -5237,7 +5237,7 @@ ${headers}`;
       method: 'POST',
       title: 'Salvar contato no WhatsApp',
       path: `/v1/instances/${exampleInstanceId}/contacts`,
-      description: 'Adiciona um contato na agenda do WhatsApp conectado quando o adapter permitir.',
+      description: 'Adiciona um contato na agenda do WhatsApp conectado quando a conta permitir.',
       requestBody: `{
   "phone": "+${examplePhone}",
   "name": "Cliente"
@@ -5479,7 +5479,7 @@ ${headers}`;
       method: 'POST',
       title: 'Criar comunidade',
       path: `/v1/instances/${exampleInstanceId}/communities`,
-      description: 'Cria uma comunidade no WhatsApp quando o adapter e a conta permitem.',
+      description: 'Cria uma comunidade no WhatsApp quando a conta conectada permite.',
       requestBody: `{
   "name": "Comunidade Ravox",
   "description": "Assuntos importantes"
@@ -5536,7 +5536,7 @@ ${headers}`;
       method: 'GET',
       title: 'Listar canais',
       path: `/v1/instances/${exampleInstanceId}/newsletters`,
-      description: 'Lista canais disponíveis para a instância conforme suporte do adapter.',
+      description: 'Lista canais disponíveis para a instância conforme os recursos da conta conectada.',
     }),
     ...[
       ['newsletters-metadata', 'GET', 'Metadata do canal', '', undefined],
@@ -5576,7 +5576,7 @@ ${headers}`;
       method: 'PATCH',
       title: 'Atualizar perfil Business',
       path: `/v1/instances/${exampleInstanceId}/business/profile`,
-      description: 'Atualiza campos do perfil Business expostos pelo Baileys.',
+      description: 'Atualiza campos do perfil Business disponíveis para a conta conectada.',
       requestBody: `{
   "updates": {
     "description": "Atendimento Ravox",
@@ -5604,7 +5604,7 @@ ${headers}`;
       path: `/v1/instances/${exampleInstanceId}/business${suffix ?? ''}`,
       description: `${title} usando os recursos Business disponíveis na conta conectada.`,
       requestBody: body,
-      notes: ['Requer conta WhatsApp Business e suporte do método correspondente no Baileys.', 'Alguns campos aceitos pelo WhatsApp podem variar por região e tipo de conta.'],
+      notes: ['Requer conta WhatsApp Business com o recurso disponível.', 'Alguns campos aceitos pelo WhatsApp podem variar por região e tipo de conta.'],
     })),
     autoDoc({
       id: 'queue-list',
@@ -5677,11 +5677,11 @@ ${headers}`;
   }
 }`;
   const roadmapItems = [
-    'Botões e listas interativas quando o adapter expuser suporte confiável',
+    'Botões e listas interativas quando houver suporte confiável na integração',
     'Chamadas/SIP e tokens de call se houver suporte fora da plataforma Z-API',
-    'Meta AI quando existir método Baileys seguro',
+    'Meta AI quando existir suporte seguro na integração',
     'Mobile registration completo fora do QR Code/pairing code',
-    'Notas de chat Business quando o adapter suportar claramente',
+    'Notas de chat Business quando houver suporte claro na integração',
     'Persistência completa de configurações avançadas de fila',
     'Compatibilidade literal com rotas Z-API somente se virar requisito explícito',
   ];
@@ -5825,7 +5825,7 @@ ${headers}`;
               <h1 className="mt-3 text-3xl font-semibold tracking-tight text-white">RavoxZap Public API</h1>
               <p className="mt-3 max-w-3xl text-base leading-7 text-gray-400">
                 O RavoxZap é um gateway/API multiusuário para WhatsApp via QR Code. Ele conecta uma instância WhatsApp,
-                recebe chamadas HTTP, coloca os comandos em fila e usa o worker Baileys para executar as ações no WhatsApp.
+                recebe chamadas HTTP, coloca os comandos em fila e usa workers para executar as ações no WhatsApp.
                 Hoje a API pública cobre mensagens básicas e avançadas, contatos, privacidade, perfil, status, chats,
                 grupos, comunidades, canais/newsletters, recursos Business, fila e operações assíncronas.
               </p>
@@ -5885,7 +5885,7 @@ ${headers}`;
             <div>
               <h2 className="text-2xl font-semibold">Fluxo</h2>
               <div className="mt-4 rounded-xl border border-[#2d3036] bg-[#111318] p-5 font-mono text-sm text-gray-300">
-                API pública → valida token e escopo → salva mídia local quando existir → cria mensagem → BullMQ → Worker → Baileys → WhatsApp
+                API pública → valida token e escopo → salva mídia quando existir → cria mensagem → fila → worker → WhatsApp
               </div>
             </div>
             <div>

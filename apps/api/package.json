@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx watch --env-file ../../.env src/server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node --env-file ../../.env dist/server.js",
+    "start": "node dist/server.js",
     "check": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests"
@@ -24,6 +24,7 @@
     "@ravoxzap/logger": "0.1.0",
     "@ravoxzap/queue": "0.1.0",
     "@ravoxzap/shared": "0.1.0",
+    "@ravoxzap/storage": "0.1.0",
     "@scalar/fastify-api-reference": "^1.35.1",
     "fastify": "^5.2.0",
     "nanoid": "^5.1.11",
