@@ -80,6 +80,31 @@ enum WhatsAppOperationStatus {
   FAILED
 }
 
+enum BillingProvider {
+  MERCADO_PAGO
+}
+
+enum BillingSubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  PAUSED
+  CANCELED
+}
+
+enum BillingPurchaseStatus {
+  PENDING
+  PAID
+  EXPIRED
+  CANCELED
+  FAILED
+}
+
+enum BillingPurchaseType {
+  INITIAL_SUBSCRIPTION
+  INSTANCE_SLOT_UPGRADE
+}
+
 model User {
   id           String   @id @default(cuid())
   name         String?
@@ -105,6 +130,8 @@ model Organization {
   apiKeys   ApiKey[]
   webhooks  WebhookEndpoint[]
   operations WhatsAppOperation[]
+  billingSubscription BillingSubscription?
+  billingPurchases BillingPurchase[]
 }
 
 model OrganizationMember {
@@ -385,4 +412,89 @@ model WhatsAppOperation {
   @@index([instanceId, status])
   @@index([chatId])
   @@index([groupId])
+}
+
+model BillingPlan {
+  id                           String   @id @default(cuid())
+  code                         String   @unique
+  name                         String
+  baseMonthlyCents             Int
+  includedInstances            Int      @default(1)
+  additionalMonthlyCents       Int
+  volumeAdditionalMonthlyCents Int
+  volumeThreshold              Int      @default(10)
+  trialDays                    Int      @default(30)
+  active                       Boolean  @default(true)
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+
+  subscriptions BillingSubscription[]
+}
+
+model BillingSubscription {
+  id                     String                    @id @default(cuid())
+  organizationId         String                    @unique
+  planId                 String
+  provider               BillingProvider           @default(MERCADO_PAGO)
+  status                 BillingSubscriptionStatus @default(TRIALING)
+  maxInstances           Int                       @default(1)
+  monthlyAmountCents     Int
+  trialEndsAt            DateTime?
+  currentPeriodEnd       DateTime?
+  providerPlanId         String?
+  providerSubscriptionId String?                   @unique
+  checkoutUrl            String?
+  createdAt              DateTime                  @default(now())
+  updatedAt              DateTime                  @updatedAt
+
+  organization Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan         BillingPlan           @relation(fields: [planId], references: [id])
+  events       BillingWebhookEvent[]
+  purchases    BillingPurchase[]
+
+  @@index([provider, status])
+  @@index([trialEndsAt])
+  @@index([currentPeriodEnd])
+}
+
+model BillingPurchase {
+  id                    String                @id @default(cuid())
+  organizationId        String
+  subscriptionId        String?
+  type                  BillingPurchaseType
+  status                BillingPurchaseStatus @default(PENDING)
+  provider              BillingProvider       @default(MERCADO_PAGO)
+  currentMaxInstances   Int
+  requestedMaxInstances Int
+  amountCents           Int
+  providerReference     String?               @unique
+  checkoutUrl           String?
+  confirmedAt           DateTime?
+  expiresAt             DateTime?
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+
+  organization Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subscription BillingSubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, status])
+  @@index([subscriptionId])
+  @@index([type, status])
+}
+
+model BillingWebhookEvent {
+  id              String          @id @default(cuid())
+  provider        BillingProvider @default(MERCADO_PAGO)
+  providerEventId String
+  eventType       String
+  subscriptionId  String?
+  payload         Json
+  processedAt     DateTime?
+  createdAt       DateTime        @default(now())
+
+  subscription BillingSubscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, providerEventId])
+  @@index([subscriptionId])
+  @@index([eventType])
 }

@@ -1,5 +1,6 @@
 export * from './schemas/api-key.js';
 export * from './schemas/auth.js';
+export * from './schemas/billing.js';
 export * from './schemas/contact.js';
 export * from './schemas/instance.js';
 export * from './schemas/message.js';

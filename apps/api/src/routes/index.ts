@@ -14,7 +14,6 @@ import {
 import type { Env } from '@ravoxzap/config';
 import { prisma } from '@ravoxzap/database';
 import type { RavoxQueues } from '@ravoxzap/queue';
-import { createMediaStorage } from '@ravoxzap/storage';
 import {
   createApiKeySchema,
   createContactSchema,
@@ -30,6 +29,7 @@ import {
   type WhatsAppOperationType,
   type WebhookEvent,
 } from '@ravoxzap/shared';
+import { createMediaStorage } from '@ravoxzap/storage';
 
 import { AppError } from '../errors/app-error.js';
 import {
@@ -38,6 +38,10 @@ import {
   authenticateApiKey,
   getCurrentUser,
 } from '../lib/auth.js';
+import {
+  assertBillableOrganization,
+  assertInstanceSlotAvailable,
+} from '../lib/billing.js';
 import { slugify } from '../lib/slug.js';
 import { createWebhookSecret, webhookEventFromDb, webhookEventToDb } from '../lib/webhook.js';
 
@@ -591,6 +595,8 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
   async function getPublicInstance(request: FastifyRequest) {
     const apiKey = await authenticateApiKey(request, env.API_KEY_SECRET);
     const { instanceId } = parseParams(request, instanceIdParamsSchema);
+    await assertBillableOrganization(apiKey.organizationId);
+
     const instance = await prisma.whatsAppInstance.findFirst({
       where: { id: instanceId, organizationId: apiKey.organizationId },
     });
@@ -608,6 +614,8 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
     chatId?: string;
     groupId?: string;
   }) {
+    await assertBillableOrganization(input.organizationId);
+
     const operation = await prisma.whatsAppOperation.create({
       data: {
         organizationId: input.organizationId,
@@ -1117,6 +1125,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
   app.post('/instances', async request => {
     const data = parseBody(request, createInstanceSchema);
     await assertOrganizationAccess(request, data.organizationId, ['OWNER', 'ADMIN']);
+    await assertInstanceSlotAvailable(data.organizationId);
 
     const instance = await prisma.whatsAppInstance.create({
       data: {
@@ -1156,6 +1165,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
   app.post('/instances/:id/start', async request => {
     const { id } = parseParams(request, idParamsSchema);
     const instance = await assertInstanceAccess(request, id, ['OWNER', 'ADMIN']);
+    await assertBillableOrganization(instance.organizationId);
 
     await queues.connectInstance.add('connect-instance', {
       instanceId: id,
@@ -1168,6 +1178,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
   app.post('/instances/:id/restart', async request => {
     const { id } = parseParams(request, idParamsSchema);
     const instance = await assertInstanceAccess(request, id, ['OWNER', 'ADMIN']);
+    await assertBillableOrganization(instance.organizationId);
 
     await queues.disconnectInstance.add('disconnect-instance', {
       instanceId: id,
@@ -1185,6 +1196,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
   app.post('/instances/:id/reset-qrcode', async request => {
     const { id } = parseParams(request, idParamsSchema);
     const instance = await assertInstanceAccess(request, id, ['OWNER', 'ADMIN']);
+    await assertBillableOrganization(instance.organizationId);
 
     await prisma.whatsAppInstance.update({
       where: { id },
@@ -1416,6 +1428,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
   app.post('/messages/send-text', async request => {
     const data = parseBody(request, sendTextMessageSchema);
     const instance = await assertInstanceAccess(request, data.instanceId, ['OWNER', 'ADMIN', 'MEMBER']);
+    await assertBillableOrganization(instance.organizationId);
     const remoteJid = data.to.endsWith('@s.whatsapp.net') || data.to.endsWith('@g.us')
       ? data.to
       : `${data.to.replace(/\D/g, '')}@s.whatsapp.net`;
@@ -1488,6 +1501,7 @@ export function registerRoutes(app: FastifyInstance, queues: RavoxQueues, env: E
 
     const data = sendFileFieldsSchema.parse(fields);
     const instance = await assertInstanceAccess(request, data.instanceId, ['OWNER', 'ADMIN', 'MEMBER']);
+    await assertBillableOrganization(instance.organizationId);
     const remoteJid = data.to.endsWith('@s.whatsapp.net') || data.to.endsWith('@g.us')
       ? data.to
       : `${data.to.replace(/\D/g, '')}@s.whatsapp.net`;

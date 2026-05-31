@@ -9,7 +9,8 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "turbo run dev --filter=@ravoxzap/api --filter=@ravoxzap/worker --filter=@ravoxzap/dashboard --filter=@ravoxzap/ravoxchat",
+    "dev": "turbo run dev --filter=@ravoxzap/api --filter=@ravoxzap/worker --filter=@ravoxzap/landing --filter=@ravoxzap/dashboard --filter=@ravoxzap/ravoxchat",
+    "dev:landing": "yarn workspace @ravoxzap/landing dev",
     "dev:dashboard": "yarn workspace @ravoxzap/dashboard dev",
     "dev:chat": "yarn workspace @ravoxzap/ravoxchat dev",
     "dev:api": "yarn workspace @ravoxzap/api dev",

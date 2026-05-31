@@ -25,6 +25,9 @@ const envSchema = z.object({
   R2_SECRET_ACCESS_KEY: z.string().optional(),
   WORKER_REPLICAS: z.coerce.number().int().min(1).default(1),
   WORKER_LOCK_TTL_MS: z.coerce.number().int().min(5000).default(30000),
+  MERCADO_PAGO_ACCESS_TOKEN: z.string().optional(),
+  MERCADO_PAGO_BASE_URL: z.string().url().default('https://api.mercadopago.com'),
+  MERCADO_PAGO_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

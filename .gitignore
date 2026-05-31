@@ -3,6 +3,9 @@ node_modules/
 
 dist/
 **/dist/
+.next/
+**/.next/
+*.tsbuildinfo
 coverage/
 .turbo/
 **/.turbo/

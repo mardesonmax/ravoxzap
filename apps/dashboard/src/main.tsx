@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient
 import {
   Activity,
   Archive,
+  ArrowRight,
   ArrowLeft,
   Bell,
   BarChart3,
@@ -12,9 +13,11 @@ import {
   CircleAlert,
   Clock3,
   Copy,
+  CreditCard,
   Crown,
   DoorOpen,
   Eraser,
+  ExternalLink,
   FileText,
   KeyRound,
   LogOut,
@@ -53,6 +56,9 @@ import {
   getToken,
   setToken,
   type Chat,
+  type BillingPlan,
+  type BillingPurchase,
+  type BillingSubscriptionResponse,
   type Contact,
   type DashboardSummary,
   type InstanceStatus,
@@ -78,13 +84,15 @@ const statusConfig: Record<InstanceStatus, { label: string; color: string }> = {
   LOGGED_OUT: { label: 'Sessão removida', color: 'bg-gray-700' },
 };
 
-type DashboardView = 'dashboard' | 'instances' | 'api-keys' | 'docs';
+type DashboardView = 'dashboard' | 'instances' | 'api-keys' | 'docs' | 'billing-checkout';
 type InstanceTab = 'details' | 'webhooks';
 
 type DashboardRoute = {
   view: DashboardView;
   instanceId?: string;
   instanceTab: InstanceTab;
+  purchaseId?: string;
+  checkoutSlots?: number;
 };
 
 type ComposerDraft = {
@@ -102,10 +110,46 @@ const viewPaths: Record<DashboardView, string> = {
   instances: '/dashboard/instances',
   'api-keys': '/dashboard/api-keys',
   docs: '/docs',
+  'billing-checkout': '/dashboard/billing/checkout',
 };
 
-function parseDashboardRoute(pathname = window.location.pathname): DashboardRoute {
-  const segments = pathname.split('/').filter(Boolean);
+const billingStatusLabel: Record<string, string> = {
+  TRIALING: 'Teste grátis',
+  ACTIVE: 'Ativa',
+  PAST_DUE: 'Pagamento pendente',
+  PAUSED: 'Pausada',
+  CANCELED: 'Cancelada',
+};
+
+function formatCurrency(cents: number) {
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(cents / 100);
+}
+
+function daysUntil(date: string | null) {
+  if (!date) return null;
+  return Math.max(Math.ceil((new Date(date).getTime() - Date.now()) / 86_400_000), 0);
+}
+
+function calculateBillingAmount(maxInstances: number, plan?: BillingPlan) {
+  const base = plan?.baseMonthlyCents ?? 5_900;
+  const included = Math.max(plan?.includedInstances ?? 1, 1);
+  const additional = plan?.additionalMonthlyCents ?? 3_900;
+  const volumeAdditional = plan?.volumeAdditionalMonthlyCents ?? 2_900;
+  const volumeThreshold = plan?.volumeThreshold ?? 10;
+  const extraInstances = Math.max(maxInstances - included, 0);
+  const standardExtraSlots = Math.max(volumeThreshold - included - 1, 0);
+  const standardExtras = Math.min(extraInstances, standardExtraSlots);
+  const volumeExtras = Math.max(extraInstances - standardExtras, 0);
+
+  return base + standardExtras * additional + volumeExtras * volumeAdditional;
+}
+
+function parseDashboardRoute(pathname = `${window.location.pathname}${window.location.search}`): DashboardRoute {
+  const parsedUrl = new URL(pathname, window.location.origin);
+  const segments = parsedUrl.pathname.split('/').filter(Boolean);
 
   if (segments[0] === 'dashboard') {
     if (segments[1] === 'instances') {
@@ -114,6 +158,16 @@ function parseDashboardRoute(pathname = window.location.pathname): DashboardRout
         view: 'instances',
         instanceId: segments[2],
         instanceTab: tab === 'webhooks' ? 'webhooks' : 'details',
+      };
+    }
+
+    if (segments[1] === 'billing' && segments[2] === 'checkout') {
+      const checkoutSlots = Number(parsedUrl.searchParams.get('slots') ?? 1);
+      return {
+        view: 'billing-checkout',
+        purchaseId: segments[3],
+        checkoutSlots: Number.isFinite(checkoutSlots) ? Math.max(checkoutSlots, 1) : 1,
+        instanceTab: 'details',
       };
     }
 
@@ -127,6 +181,14 @@ function parseDashboardRoute(pathname = window.location.pathname): DashboardRout
 function instanceRoutePath(instanceId: string, tab: InstanceTab) {
   if (tab === 'details') return `/dashboard/instances/${instanceId}`;
   return `/dashboard/instances/${instanceId}/${tab}`;
+}
+
+function billingCheckoutRoutePath(purchaseId: string) {
+  return `/dashboard/billing/checkout/${purchaseId}`;
+}
+
+function newBillingCheckoutRoutePath(slots: number) {
+  return `/dashboard/billing/checkout/new?slots=${Math.max(slots, 1)}`;
 }
 
 const countryCallingCodes = [
@@ -617,7 +679,9 @@ function getDefaultApiKeyName(index: number) {
 }
 
 function AuthScreen({ onAuth }: { onAuth: () => void }) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [mode, setMode] = useState<'login' | 'register'>(() =>
+    window.location.pathname === '/register' ? 'register' : 'login',
+  );
   const [name, setName] = useState('');
   const [organizationName, setOrganizationName] = useState('Ravox Labs');
   const [email, setEmail] = useState('');
@@ -720,6 +784,286 @@ function AuthScreen({ onAuth }: { onAuth: () => void }) {
   );
 }
 
+function _LandingPage({ authenticated }: { authenticated: boolean }) {
+  const appHref = authenticated ? '/dashboard' : '/register';
+  const loginHref = authenticated ? '/dashboard' : '/login';
+  const highlights = [
+    { icon: QrCode, title: 'Instâncias via QR Code', text: 'Conecte números WhatsApp por organização e acompanhe status, QR e sessão pelo painel.' },
+    { icon: KeyRound, title: 'API para devs', text: 'Tokens por organização, rotas REST e exemplos prontos para integrar em CRMs, bots e automações.' },
+    { icon: Webhook, title: 'Webhooks assinados', text: 'Eventos de mensagens, entregas, leitura, presença e QR para manter seus sistemas sincronizados.' },
+    { icon: Clock3, title: 'Fila e workers', text: 'Comandos enfileirados, execução assíncrona e histórico de operações para ambientes reais.' },
+  ];
+  const useCases = [
+    'Agências que entregam automações WhatsApp para vários clientes.',
+    'SaaS que precisa disparar notificações e receber respostas por API.',
+    'Times técnicos que querem controlar instâncias, chaves e webhooks sem improviso.',
+  ];
+  const pricing = [
+    ['1 instância inclusa', 'R$59/mês'],
+    ['Instâncias adicionais', 'R$39/mês'],
+    ['A partir de 10 instâncias', 'R$29/mês por adicional'],
+    ['Teste grátis', '30 dias com cartão'],
+  ];
+
+  return (
+    <main className="min-h-screen bg-[#f5f7f1] text-[#111318]">
+      <section className="relative isolate min-h-[92vh] overflow-hidden bg-[#0b0c11] text-white">
+        <div className="absolute inset-0 bg-[#0b0c11]" />
+        <div className="pointer-events-none absolute inset-0 overflow-hidden opacity-35" aria-hidden="true">
+          <div className="absolute left-[4%] top-24 w-72 rounded-xl border border-white/10 bg-[#181a21] p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
+            <div className="mb-3 flex items-center gap-2 text-xs text-gray-400">
+              <span className="h-2 w-2 rounded-full bg-[#2edb5c]" />
+              INSTANCE_CONNECTED
+            </div>
+            <div className="space-y-2 text-xs text-gray-500">
+              <div className="h-2 w-44 rounded-full bg-white/20" />
+              <div className="h-2 w-56 rounded-full bg-white/10" />
+              <div className="h-2 w-32 rounded-full bg-white/10" />
+            </div>
+          </div>
+          <div className="absolute bottom-20 left-[12%] w-80 rounded-xl border border-white/10 bg-[#111318] p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
+            <code className="block text-xs leading-6 text-gray-400">{`POST /v1/instances/:id/send-text
+Authorization: Bearer ravox_live_xxxxx
+status: QUEUED`}</code>
+          </div>
+          <div className="absolute right-[6%] top-20 w-80 rounded-xl border border-white/10 bg-[#181a21] p-4 shadow-[0_20px_80px_rgba(0,0,0,0.45)]">
+            <div className="mb-3 flex items-center justify-between text-xs text-gray-400">
+              <span>Billing</span>
+              <span className="rounded-full bg-[#2edb5c]/20 px-2 py-1 text-[#8ff0a8]">TRIALING</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2 text-center text-xs">
+              <span className="rounded-md bg-white/10 py-2">12 slots</span>
+              <span className="rounded-md bg-white/10 py-2">10 online</span>
+              <span className="rounded-md bg-white/10 py-2">30 dias</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="relative z-10 mx-auto flex min-h-[92vh] max-w-[1500px] flex-col px-4 py-5 sm:px-6 lg:px-8">
+          <header className="flex h-14 items-center justify-between gap-4">
+            <a href="/" className="flex min-w-0 items-center gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-[#2edb5c] text-[#0b0c11]">
+                <MessageSquareText size={22} />
+              </span>
+              <span className="text-lg font-semibold">RavoxZap</span>
+            </a>
+            <nav className="hidden items-center gap-6 text-sm text-gray-300 md:flex">
+              <a className="transition hover:text-white" href="#produto">Produto</a>
+              <a className="transition hover:text-white" href="#precos">Preços</a>
+              <a className="transition hover:text-white" href="/docs">Docs</a>
+            </nav>
+            <a
+              href={loginHref}
+              className="inline-flex h-10 items-center justify-center rounded-md border border-white/15 px-3 text-sm font-medium text-white transition hover:bg-white/10"
+            >
+              {authenticated ? 'Abrir painel' : 'Entrar'}
+            </a>
+          </header>
+
+          <div className="grid flex-1 gap-10 py-12 lg:grid-cols-[minmax(0,0.95fr)_minmax(520px,1.05fr)] lg:items-center lg:py-8">
+            <div className="max-w-3xl">
+              <span className="inline-flex rounded-full border border-[#2edb5c]/30 bg-[#2edb5c]/10 px-3 py-1 text-sm font-medium text-[#8ff0a8]">
+                API WhatsApp para devs, agências e SaaS
+              </span>
+              <h1 className="mt-6 max-w-4xl text-4xl font-semibold leading-[1.04] sm:text-5xl lg:text-6xl">
+                RavoxZap
+              </h1>
+              <p className="mt-5 max-w-2xl text-lg leading-8 text-gray-300">
+                Venda integrações WhatsApp com instâncias mensais, trial de 30 dias, fila de comandos, webhooks e painel para controlar cada cliente sem depender de planilhas ou scripts soltos.
+              </p>
+              <div className="mt-8 flex flex-col gap-3 sm:flex-row">
+                <a
+                  href={appHref}
+                  className="inline-flex h-12 items-center justify-center gap-2 rounded-md bg-[#2edb5c] px-5 text-sm font-semibold text-[#0b0c11] transition hover:bg-[#3ff06d]"
+                >
+                  Começar teste grátis
+                  <ArrowRight size={17} />
+                </a>
+                <a
+                  href="/docs"
+                  className="inline-flex h-12 items-center justify-center gap-2 rounded-md border border-white/15 px-5 text-sm font-semibold text-white transition hover:bg-white/10"
+                >
+                  Ver documentação
+                </a>
+              </div>
+              <div className="mt-8 grid max-w-xl grid-cols-3 gap-3 text-sm text-gray-300">
+                <span>30 dias grátis</span>
+                <span>R$59/mês inicial</span>
+                <span>API + Webhooks</span>
+              </div>
+            </div>
+
+            <div className="relative min-h-[420px] lg:min-h-[620px]" aria-label="Prévia do painel RavoxZap">
+              <div className="absolute inset-0 rounded-[28px] border border-white/10 bg-[#151821] shadow-[0_34px_120px_rgba(0,0,0,0.55)]" />
+              <div className="absolute inset-4 overflow-hidden rounded-2xl border border-[#2d3036] bg-[#0f1117]">
+                <div className="flex h-12 items-center justify-between border-b border-[#2d3036] px-4">
+                  <div className="flex items-center gap-2">
+                    <span className="h-3 w-3 rounded-full bg-red-400" />
+                    <span className="h-3 w-3 rounded-full bg-amber-300" />
+                    <span className="h-3 w-3 rounded-full bg-[#2edb5c]" />
+                  </div>
+                  <code className="text-xs text-gray-500">api.ravoxzap.com/v1</code>
+                </div>
+                <div className="grid h-[calc(100%-3rem)] grid-cols-[150px_minmax(0,1fr)]">
+                  <aside className="hidden border-r border-[#2d3036] bg-[#111318] p-3 sm:block">
+                    {['Dashboard', 'Instâncias', 'API Keys', 'Docs'].map((item, index) => (
+                      <div
+                        key={item}
+                        className={`mb-2 rounded-md px-3 py-2 text-sm ${index === 1 ? 'bg-[#2edb5c] text-[#0b0c11]' : 'text-gray-400'}`}
+                      >
+                        {item}
+                      </div>
+                    ))}
+                  </aside>
+                  <div className="space-y-4 p-4">
+                    <div className="grid gap-3 sm:grid-cols-3">
+                      {[
+                        ['Instâncias', '12'],
+                        ['Conectadas', '10'],
+                        ['Mensagens 30d', '48k'],
+                      ].map(([label, value]) => (
+                        <div key={label} className="rounded-lg border border-[#2d3036] bg-[#181a21] p-3">
+                          <span className="text-xs text-gray-500">{label}</span>
+                          <strong className="mt-1 block text-2xl text-white">{value}</strong>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="rounded-lg border border-[#2d3036] bg-[#181a21] p-4">
+                      <div className="mb-4 flex items-center justify-between">
+                        <span className="font-semibold text-white">Instâncias ativas</span>
+                        <span className="rounded-full bg-[#2edb5c]/10 px-2 py-1 text-xs text-[#8ff0a8]">trial ativo</span>
+                      </div>
+                      {[
+                        ['Suporte Cliente A', 'Conectada', '#2edb5c'],
+                        ['Vendas B2B', 'Aguardando QR', '#f59e0b'],
+                        ['Bot cobrança', 'Fila 32 jobs', '#3a86ff'],
+                      ].map(([name, status, color]) => (
+                        <div key={name} className="mb-3 flex items-center justify-between rounded-md bg-[#111318] px-3 py-3">
+                          <div className="min-w-0">
+                            <strong className="block truncate text-sm text-white">{name}</strong>
+                            <span className="text-xs text-gray-500">ravox_live_xxxxx</span>
+                          </div>
+                          <span className="flex shrink-0 items-center gap-2 text-xs text-gray-300">
+                            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: color }} />
+                            {status}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-lg border border-[#2d3036] bg-[#181a21] p-4">
+                        <Webhook className="text-[#3a86ff]" size={20} />
+                        <p className="mt-3 text-sm text-gray-300">Webhook entregue em 184ms</p>
+                      </div>
+                      <div className="rounded-lg border border-[#2d3036] bg-[#181a21] p-4">
+                        <CreditCard className="text-[#2edb5c]" size={20} />
+                        <p className="mt-3 text-sm text-gray-300">12 slots contratados</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section id="produto" className="mx-auto max-w-[1320px] px-4 py-16 sm:px-6 lg:px-8">
+        <div className="grid gap-8 lg:grid-cols-[0.85fr_1.15fr] lg:items-end">
+          <div>
+            <span className="text-sm font-semibold uppercase tracking-wide text-[#198f42]">Produto</span>
+            <h2 className="mt-3 text-3xl font-semibold leading-tight sm:text-4xl">Tudo que uma operação técnica espera antes de vender WhatsApp como serviço.</h2>
+          </div>
+          <p className="text-base leading-7 text-[#4d5664]">
+            O RavoxZap junta painel administrativo, API pública, workers, storage de mídia, sessões Baileys, webhooks e billing por instância em uma base pronta para comercializar.
+          </p>
+        </div>
+
+        <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {highlights.map(({ icon: Icon, title, text }) => (
+            <article key={title} className="rounded-lg border border-[#dfe4da] bg-white p-5 shadow-sm">
+              <Icon className="text-[#198f42]" size={24} />
+              <h3 className="mt-4 text-lg font-semibold">{title}</h3>
+              <p className="mt-2 text-sm leading-6 text-[#5c6572]">{text}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <section className="bg-[#111318] px-4 py-16 text-white sm:px-6 lg:px-8">
+        <div className="mx-auto grid max-w-[1320px] gap-8 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-center">
+          <div>
+            <span className="text-sm font-semibold uppercase tracking-wide text-[#8ff0a8]">Operação</span>
+            <h2 className="mt-3 text-3xl font-semibold leading-tight sm:text-4xl">Visual operacional, direto e confiável.</h2>
+            <p className="mt-4 max-w-2xl text-base leading-7 text-gray-300">
+              Uma experiência pensada para vender infraestrutura: alto contraste, métricas claras, cards compactos e CTA objetivo para devs e agências.
+            </p>
+            <div className="mt-8 grid gap-3 sm:grid-cols-3">
+              {['Multiusuário', 'Fila BullMQ', 'Postgres + Redis'].map(item => (
+                <div key={item} className="rounded-lg border border-white/10 bg-white/[0.04] p-4 text-sm text-gray-200">
+                  <CheckCircle2 className="mb-3 text-[#2edb5c]" size={20} />
+                  {item}
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-[#181a21] p-5">
+            <code className="block whitespace-pre-wrap text-sm leading-7 text-gray-300">{`curl -X POST "$API/v1/instances/{id}/send-text" \\
+  -H "Authorization: Bearer ravox_live_xxxxx" \\
+  -H "Content-Type: application/json" \\
+  -d '{"to":"+5585999999999","body":"Olá pelo RavoxZap"}'`}</code>
+          </div>
+        </div>
+      </section>
+
+      <section id="precos" className="mx-auto grid max-w-[1320px] gap-8 px-4 py-16 sm:px-6 lg:grid-cols-[0.9fr_1.1fr] lg:px-8">
+        <div>
+          <span className="text-sm font-semibold uppercase tracking-wide text-[#198f42]">Preços</span>
+          <h2 className="mt-3 text-3xl font-semibold leading-tight sm:text-4xl">Cobrança simples por slot de instância.</h2>
+          <p className="mt-4 text-base leading-7 text-[#4d5664]">
+            O cliente entende quanto paga, você controla o limite no backend e o painel já mostra trial, uso e instâncias contratadas.
+          </p>
+        </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          {pricing.map(([label, value]) => (
+            <div key={label} className="rounded-lg border border-[#dfe4da] bg-white p-5 shadow-sm">
+              <span className="text-sm text-[#5c6572]">{label}</span>
+              <strong className="mt-2 block text-2xl">{value}</strong>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="mx-auto max-w-[1320px] px-4 pb-16 sm:px-6 lg:px-8">
+        <div className="grid gap-4 lg:grid-cols-3">
+          {useCases.map(item => (
+            <div key={item} className="rounded-lg border border-[#dfe4da] bg-[#eef3e8] p-5 text-[#263126]">
+              <Activity className="mb-4 text-[#198f42]" size={22} />
+              <p className="leading-7">{item}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="bg-[#0b0c11] px-4 py-14 text-white sm:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-[1320px] flex-col gap-6 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="text-3xl font-semibold">Pronto para vender instâncias mensais?</h2>
+            <p className="mt-2 text-gray-400">Comece com trial, conecte a primeira instância e valide a operação com clientes reais.</p>
+          </div>
+          <a
+            href={appHref}
+            className="inline-flex h-12 shrink-0 items-center justify-center gap-2 rounded-md bg-[#2edb5c] px-5 text-sm font-semibold text-[#0b0c11] transition hover:bg-[#3ff06d]"
+          >
+            Abrir RavoxZap
+            <ArrowRight size={17} />
+          </a>
+        </div>
+      </section>
+    </main>
+  );
+}
+
 function Sidebar({
   view,
   setView,
@@ -806,6 +1150,238 @@ function Sidebar({
   );
 }
 
+function BillingPanel({
+  organizationId,
+  billing,
+  totalInstances,
+  connectedCount,
+  disconnectedCount,
+  onAddInstance,
+  onBuySlots,
+  onContinuePayment,
+}: {
+  organizationId: string;
+  billing?: BillingSubscriptionResponse;
+  totalInstances: number;
+  connectedCount: number;
+  disconnectedCount: number;
+  onAddInstance: () => void;
+  onBuySlots: () => void;
+  onContinuePayment: (purchaseId: string) => void;
+}) {
+  const subscription = billing?.subscription ?? null;
+  const activeInstances = billing?.activeInstances ?? 0;
+  const trialDaysLeft = daysUntil(subscription?.trialEndsAt ?? null);
+  const maxInstances = subscription?.maxInstances ?? 0;
+  const availableSlots = Math.max(maxInstances - activeInstances, 0);
+  const pendingPurchase = billing?.pendingPurchase ?? null;
+  const statusLabel = subscription
+    ? billingStatusLabel[subscription.status] ?? subscription.status
+    : 'Sem assinatura';
+
+  return (
+    <section className="space-y-4">
+      <div className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-xl font-semibold">Instâncias web</h2>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+              subscription?.status === 'ACTIVE' || subscription?.status === 'TRIALING'
+                ? 'bg-[#2edb5c]/15 text-[#8ff0a8]'
+                : 'bg-amber-500/15 text-amber-200'
+            }`}>
+              {statusLabel}
+            </span>
+            {pendingPurchase && (
+              <span className="rounded-full bg-blue-500/15 px-2.5 py-1 text-xs font-semibold text-blue-200">
+                pagamento pendente
+              </span>
+            )}
+          </div>
+          <p className="mt-1 text-sm text-gray-400">
+            {subscription
+              ? `${activeInstances}/${maxInstances} slots em uso · ${formatCurrency(subscription.monthlyAmountCents)}/mês${subscription.status === 'TRIALING' && trialDaysLeft !== null ? ` · ${trialDaysLeft} dias de trial` : ''}`
+              : 'Escolha a quantidade de slots, inicie o trial e conecte o primeiro número.'}
+          </p>
+        </div>
+
+        <div className="flex flex-col gap-2 sm:flex-row">
+          {pendingPurchase?.checkoutUrl && (
+            <Button type="button" variant="ghost" className="w-full sm:w-auto" onClick={() => onContinuePayment(pendingPurchase.id)}>
+              <ExternalLink size={16} />
+              Continuar pagamento
+            </Button>
+          )}
+          <Button type="button" variant="ghost" className="w-full sm:w-auto" disabled={!organizationId} onClick={onBuySlots}>
+            <CreditCard size={16} />
+            Comprar slots
+          </Button>
+          <Button type="button" className="w-full sm:w-auto" disabled={!organizationId} onClick={onAddInstance}>
+            <Plus size={18} />
+            Adicionar instância
+          </Button>
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <DashboardMetricCard icon={Smartphone} title="Total de instâncias" value={totalInstances} description="Instâncias cadastradas" tone="blue" />
+        <DashboardMetricCard icon={CheckCircle2} title="Conectadas" value={connectedCount} description="Prontas para envio" />
+        <DashboardMetricCard icon={Power} title="Desconectadas" value={disconnectedCount} description="Requerem atenção" tone="red" />
+        <DashboardMetricCard icon={CreditCard} title="Slots livres" value={availableSlots} description={`${maxInstances || 0} contratados`} tone="amber" />
+      </div>
+
+      {billing?.blockReason && (
+        <p className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          {billing.blockReason}
+        </p>
+      )}
+    </section>
+  );
+}
+
+function SlotPurchaseDrawer({
+  open,
+  onClose,
+  organizationId,
+  billing,
+  navigate,
+}: {
+  open: boolean;
+  onClose: () => void;
+  organizationId: string;
+  billing?: BillingSubscriptionResponse;
+  navigate: (path: string) => void;
+}) {
+  const subscription = billing?.subscription ?? null;
+  const currentMaxInstances = subscription?.maxInstances ?? 0;
+  const currentAmount = subscription?.monthlyAmountCents ?? 0;
+  const [additionalInstances, setAdditionalInstances] = useState(1);
+  const requestedMaxInstances = currentMaxInstances + additionalInstances;
+  const nextAmount = calculateBillingAmount(Math.max(requestedMaxInstances, 1), subscription?.plan);
+  const amountDiff = Math.max(nextAmount - currentAmount, nextAmount);
+  const pendingPurchase = billing?.pendingPurchase ?? null;
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end bg-black/70">
+      <div className="flex h-full w-full max-w-lg flex-col border-l border-[#2d3036] bg-[#181a21] shadow-[0_24px_90px_rgba(0,0,0,0.55)]">
+        <div className="flex items-start justify-between gap-3 border-b border-[#2d3036] p-5">
+          <div>
+            <h2 className="text-lg font-semibold">Comprar slots de instância</h2>
+            <p className="mt-1 text-sm text-gray-400">
+              O limite só muda depois da confirmação do pagamento.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-md text-gray-400 transition hover:bg-[#23262e] hover:text-white"
+            onClick={onClose}
+            aria-label="Fechar compra de slots"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-5 overflow-y-auto p-5">
+          {pendingPurchase && (
+            <div className="rounded-lg border border-blue-500/20 bg-blue-500/10 p-4 text-sm text-blue-100">
+              <strong className="block text-white">Pagamento pendente</strong>
+              <span className="mt-1 block text-blue-100/80">
+                Existe uma compra para {pendingPurchase.requestedMaxInstances} slots aguardando confirmação.
+              </span>
+              {pendingPurchase.checkoutUrl && (
+                <Button className="mt-3 w-full" type="button" onClick={() => {
+                  onClose();
+                  navigate(billingCheckoutRoutePath(pendingPurchase.id));
+                }}>
+                  <ExternalLink size={16} />
+                  Continuar pagamento
+                </Button>
+              )}
+            </div>
+          )}
+
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500">
+              Quantos slots deseja adicionar?
+            </label>
+            <div className="mt-3 grid grid-cols-4 gap-2">
+              {[1, 2, 5, 10].map(quantity => (
+                <button
+                  key={quantity}
+                  type="button"
+                  className={`h-10 rounded-md border text-sm font-semibold transition ${
+                    additionalInstances === quantity
+                      ? 'border-[#2edb5c] bg-[#2edb5c] text-[#0b0c11]'
+                      : 'border-[#2d3036] bg-[#111318] text-gray-300 hover:border-[#3c424c] hover:text-white'
+                  }`}
+                  onClick={() => setAdditionalInstances(quantity)}
+                >
+                  +{quantity}
+                </button>
+              ))}
+            </div>
+            <Input
+              className="mt-3"
+              min={1}
+              max={500}
+              type="number"
+              value={additionalInstances}
+              onChange={event => setAdditionalInstances(Math.max(Number(event.target.value), 1))}
+            />
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border border-[#2d3036] bg-[#111318] p-3">
+              <span className="text-xs uppercase tracking-wide text-gray-500">Atual</span>
+              <strong className="mt-1 block text-xl text-white">{currentMaxInstances}</strong>
+            </div>
+            <div className="rounded-lg border border-[#2d3036] bg-[#111318] p-3">
+              <span className="text-xs uppercase tracking-wide text-gray-500">Compra</span>
+              <strong className="mt-1 block text-xl text-white">+{additionalInstances}</strong>
+            </div>
+            <div className="rounded-lg border border-[#2d3036] bg-[#111318] p-3">
+              <span className="text-xs uppercase tracking-wide text-gray-500">Novo limite</span>
+              <strong className="mt-1 block text-xl text-white">{requestedMaxInstances}</strong>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-[#2d3036] bg-[#111318] p-4">
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-sm text-gray-400">Mensalidade após confirmação</span>
+              <strong className="text-white">{formatCurrency(nextAmount)}</strong>
+            </div>
+            <div className="mt-2 flex items-center justify-between gap-4">
+              <span className="text-sm text-gray-400">Diferença estimada</span>
+              <strong className="text-[#8ff0a8]">+{formatCurrency(amountDiff)}/mês</strong>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-4 text-sm text-amber-100">
+            Apos o pagamento aprovado, os slots sao liberados automaticamente na sua conta.
+          </div>
+        </div>
+
+        <div className="border-t border-[#2d3036] p-5">
+          <Button
+            className="w-full"
+            type="button"
+            disabled={!organizationId || additionalInstances < 1}
+            onClick={() => {
+              onClose();
+              navigate(newBillingCheckoutRoutePath(additionalInstances));
+            }}
+          >
+            <ExternalLink size={16} />
+            Abrir checkout
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function InstancesView({
   organizations,
   selectedInstance,
@@ -813,6 +1389,7 @@ function InstancesView({
   routeInstanceId,
   routeInstanceTab,
   navigate,
+  billing,
 }: {
   organizations: Organization[];
   selectedInstance?: WhatsAppInstance;
@@ -820,6 +1397,7 @@ function InstancesView({
   routeInstanceId?: string;
   routeInstanceTab: InstanceTab;
   navigate: (path: string) => void;
+  billing?: BillingSubscriptionResponse;
 }) {
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
@@ -827,11 +1405,14 @@ function InstancesView({
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'CONNECTED' | 'DISCONNECTED'>('ALL');
   const [openMenuInstanceId, setOpenMenuInstanceId] = useState<string | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [slotPurchaseOpen, setSlotPurchaseOpen] = useState(false);
   const [deleteInstanceTarget, setDeleteInstanceTarget] = useState<WhatsAppInstance | null>(null);
   const instanceMenuRef = useRef<HTMLDivElement | null>(null);
   const organizationId = organizations[0]?.id ?? '';
   const instances = useQuery({ queryKey: ['instances'], queryFn: apiClient.instances });
   const instanceList = instances.data ?? [];
+  const canCreateInstance = Boolean(organizationId && billing?.canCreateInstance);
+  const createBlockedReason = billing?.blockReason ?? 'Inicie o teste grátis para criar instâncias.';
   const connectedCount = instanceList.filter(instance => instance.status === 'CONNECTED').length;
   const disconnectedCount = instanceList.filter(instance => instance.status !== 'CONNECTED').length;
   const filteredInstances = instanceList.filter(instance => {
@@ -902,21 +1483,31 @@ function InstancesView({
     );
   }
 
+  function handleAddInstance() {
+    if (canCreateInstance) {
+      setCreateModalOpen(true);
+      return;
+    }
+
+    setSlotPurchaseOpen(true);
+  }
+
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-3">
-        <DashboardMetricCard icon={Smartphone} title="Total de instâncias" value={instanceList.length} description="Instâncias cadastradas" tone="blue" />
-        <DashboardMetricCard icon={CheckCircle2} title="Conectadas" value={connectedCount} description="Prontas para envio" />
-        <DashboardMetricCard icon={Power} title="Desconectadas" value={disconnectedCount} description="Requerem atenção" tone="red" />
-      </div>
+      <BillingPanel
+        organizationId={organizationId}
+        billing={billing}
+        totalInstances={instanceList.length}
+        connectedCount={connectedCount}
+        disconnectedCount={disconnectedCount}
+        onAddInstance={handleAddInstance}
+        onBuySlots={() => setSlotPurchaseOpen(true)}
+        onContinuePayment={purchaseId => navigate(billingCheckoutRoutePath(purchaseId))}
+      />
 
-      <section className="overflow-visible rounded-lg border border-[#2d3036] bg-[#181a21]">
-        <div className="flex flex-col gap-4 border-b border-[#2d3036] p-4">
-          <div className="min-w-0">
-            <h2 className="text-lg font-semibold">Instâncias</h2>
-            <p className="text-sm text-gray-400">Listagem das conexões WhatsApp e suas configurações.</p>
-          </div>
-          <div className="grid gap-3 xl:grid-cols-[auto_minmax(0,1fr)_auto] xl:items-center">
+      <section className="space-y-3">
+        <div className="rounded-xl border border-[#2d3036] bg-[#181a21] p-3">
+          <div className="grid gap-3 xl:grid-cols-[auto_minmax(0,1fr)] xl:items-center">
             <div className="flex rounded-full bg-[#111318] p-1">
               {[
                 ['ALL', 'Todas'],
@@ -937,30 +1528,24 @@ function InstancesView({
             </div>
             <div className="relative">
               <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={16} />
-              <Input className="pl-9" placeholder="Busque por nome, número ou ID" value={search} onChange={event => setSearch(event.target.value)} />
+              <Input
+                className="pl-9"
+                placeholder="Busque por nome, número ou ID"
+                value={search}
+                onChange={event => setSearch(event.target.value)}
+              />
             </div>
-            <Button
-              type="button"
-              className="w-full sm:w-fit xl:justify-self-end"
-              disabled={!organizationId}
-              onClick={() => setCreateModalOpen(true)}
-            >
-              <Plus size={18} />
-              Nova instância
-            </Button>
           </div>
         </div>
 
-        <div className="divide-y divide-[#2d3036]">
+        <div className="grid gap-3">
           {filteredInstances.map(instance => (
-            <div
+            <article
               key={instance.id}
               role="button"
               tabIndex={0}
-              className={`group relative grid cursor-pointer gap-4 px-4 py-4 text-sm transition hover:bg-[#1c1f26] focus:outline-none focus:ring-2 focus:ring-inset focus:ring-[#2edb5c]/50 md:grid-cols-[minmax(0,1fr)_auto] md:items-center ${
-                selectedInstance?.id === instance.id
-                  ? 'bg-[#20232b]'
-                  : 'bg-transparent'
+              className={`group relative cursor-pointer rounded-xl border border-[#2d3036] bg-[#181a21] p-4 text-sm transition hover:border-[#3c424c] hover:bg-[#1c1f26] focus:outline-none focus:ring-2 focus:ring-[#2edb5c]/50 ${
+                selectedInstance?.id === instance.id ? 'border-[#2edb5c]/50 bg-[#20232b]' : ''
               }`}
               onClick={() => {
                 setOpenMenuInstanceId(null);
@@ -975,61 +1560,101 @@ function InstancesView({
                 }
               }}
             >
-              <div className="min-w-0">
-                <div className="flex min-w-0 flex-wrap items-center gap-2">
-                  <span className="truncate font-semibold text-white">{instance.name}</span>
-                  <StatusPill status={instance.status} />
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-blue-500/15 text-blue-300">
+                    <Smartphone size={20} />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 flex-wrap items-center gap-2">
+                      <h3 className="truncate text-base font-semibold text-white">{instance.name}</h3>
+                      <StatusPill status={instance.status} />
+                    </div>
+                    <p className="mt-1 truncate text-sm text-gray-500">{instance.phoneNumber ?? 'Sem número conectado'}</p>
+                  </div>
                 </div>
-                <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-gray-500">
-                  <span className="truncate">{instance.phoneNumber ?? 'Sem número conectado'}</span>
-                  <span className="hidden h-1 w-1 rounded-full bg-gray-700 sm:block" />
-                  <code className="min-w-0 truncate text-xs">{instance.id}</code>
-                </div>
-              </div>
 
-              <div
-                ref={openMenuInstanceId === instance.id ? instanceMenuRef : undefined}
-                className="flex justify-start md:justify-end"
-              >
-                <button
-                  type="button"
-                  className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-[#2d3036] bg-[#111318] text-gray-400 transition hover:border-[#3c424c] hover:bg-[#1f2229] hover:text-white"
-                  onClick={event => {
-                    event.stopPropagation();
-                    setOpenMenuInstanceId(current => (current === instance.id ? null : instance.id));
-                  }}
-                  aria-label={`Abrir menu da instância ${instance.name}`}
-                >
-                  <MoreVertical size={16} />
-                </button>
-                {openMenuInstanceId === instance.id && (
-                  <div
-                    className="absolute right-3 top-14 z-20 w-44 overflow-hidden rounded-lg border border-[#2d3036] bg-[#111318] p-1 shadow-[0_18px_60px_rgba(0,0,0,0.36)]"
-                    onClick={event => event.stopPropagation()}
-                  >
+                <div className="grid min-w-0 gap-3 sm:grid-cols-3 lg:w-[680px]">
+                  <div className="rounded-lg border border-[#2d3036] bg-[#111318] px-3 py-2">
+                    <span className="block text-xs font-semibold uppercase tracking-wide text-gray-500">Número</span>
+                    <span className="mt-1 block truncate text-gray-300">{instance.phoneNumber ?? 'Aguardando conexão'}</span>
+                  </div>
+                  <div className="rounded-lg border border-[#2d3036] bg-[#111318] px-3 py-2">
+                    <span className="block text-xs font-semibold uppercase tracking-wide text-gray-500">ID</span>
                     <button
                       type="button"
-                      className="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
-                      onClick={() => {
-                        setDeleteInstanceTarget(instance);
-                        setOpenMenuInstanceId(null);
+                      className="mt-1 flex w-full items-center gap-2 font-mono text-xs text-gray-300 transition hover:text-white"
+                      onClick={event => {
+                        event.stopPropagation();
+                        void navigator.clipboard?.writeText(instance.id);
                       }}
                     >
-                      <Trash2 size={15} />
-                      Excluir
+                      <span className="min-w-0 truncate">{instance.id}</span>
+                      <Copy size={13} className="shrink-0" />
                     </button>
                   </div>
-                )}
+                  <div className="rounded-lg border border-[#2d3036] bg-[#111318] px-3 py-2">
+                    <span className="block text-xs font-semibold uppercase tracking-wide text-gray-500">Pagamento</span>
+                    <span className="mt-1 inline-flex rounded-full bg-[#2edb5c]/15 px-2 py-0.5 text-xs font-semibold text-[#8ff0a8]">
+                      Incluso no plano
+                    </span>
+                  </div>
+                </div>
+
+                <div ref={openMenuInstanceId === instance.id ? instanceMenuRef : undefined} className="flex shrink-0 justify-end">
+                  <button
+                    type="button"
+                    className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-[#2d3036] bg-[#111318] text-gray-400 transition hover:border-[#3c424c] hover:bg-[#1f2229] hover:text-white"
+                    onClick={event => {
+                      event.stopPropagation();
+                      setOpenMenuInstanceId(current => (current === instance.id ? null : instance.id));
+                    }}
+                    aria-label={`Abrir menu da instância ${instance.name}`}
+                  >
+                    <MoreVertical size={16} />
+                  </button>
+                  {openMenuInstanceId === instance.id && (
+                    <div
+                      className="absolute right-4 top-14 z-20 w-44 overflow-hidden rounded-lg border border-[#2d3036] bg-[#111318] p-1 shadow-[0_18px_60px_rgba(0,0,0,0.36)]"
+                      onClick={event => event.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        className="flex w-full cursor-pointer items-center gap-2 rounded-md px-3 py-2 text-left text-sm text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
+                        onClick={() => {
+                          setDeleteInstanceTarget(instance);
+                          setOpenMenuInstanceId(null);
+                        }}
+                      >
+                        <Trash2 size={15} />
+                        Excluir
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            </article>
           ))}
+
           {filteredInstances.length === 0 && (
-            <div className="rounded-lg border border-dashed border-[#2d3036] px-4 py-8 text-sm text-gray-500">
-              Nenhuma instância encontrada.
+            <div className="rounded-xl border border-dashed border-[#2d3036] bg-[#181a21] px-4 py-10 text-center text-sm text-gray-500">
+              <p>Nenhuma instância encontrada.</p>
+              <Button type="button" className="mt-4" onClick={handleAddInstance}>
+                <Plus size={16} />
+                Adicionar instância
+              </Button>
             </div>
           )}
         </div>
       </section>
+
+      <SlotPurchaseDrawer
+        open={slotPurchaseOpen}
+        onClose={() => setSlotPurchaseOpen(false)}
+        organizationId={organizationId}
+        billing={billing}
+        navigate={navigate}
+      />
 
       {createModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -1043,7 +1668,12 @@ function InstancesView({
             <div className="flex items-start justify-between gap-3 border-b border-[#2d3036] p-4">
               <div>
                 <h2 className="text-lg font-semibold">Nova instância</h2>
-                <p className="mt-1 text-sm text-gray-400">Crie uma conexão WhatsApp e leia o QR Code em seguida.</p>
+              <p className="mt-1 text-sm text-gray-400">Crie uma conexão WhatsApp e leia o QR Code em seguida.</p>
+              {!canCreateInstance && (
+                <p className="mt-2 rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+                  {createBlockedReason}
+                </p>
+              )}
               </div>
               <button
                 type="button"
@@ -1082,7 +1712,7 @@ function InstancesView({
               >
                 Cancelar
               </Button>
-              <Button className="w-full sm:w-auto" disabled={!organizationId || !name.trim() || create.isPending}>
+              <Button className="w-full sm:w-auto" disabled={!canCreateInstance || !name.trim() || create.isPending}>
                 <Plus size={18} />
                 Criar instância
               </Button>
@@ -3442,14 +4072,106 @@ function ApiKeysView({ organizations }: { organizations: Organization[] }) {
         <div className="flex flex-col gap-3 border-b border-[#2d3036] p-4 md:flex-row md:items-center md:justify-between">
           <div className="min-w-0">
             <h2 className="text-lg font-semibold">API Keys</h2>
-            <p className="text-sm text-gray-400">Tokens para sistemas, automações e clientes externos.</p>
+            <p className="text-sm text-gray-400">Crie uma chave por integração e copie o token apenas no momento da criação.</p>
           </div>
           <Button className="w-full md:w-auto" disabled={!organizationId} onClick={openModal}>
             <KeyRound size={18} />
-            Nova chave
+            Criar chave
           </Button>
         </div>
-        <div className="divide-y divide-[#2d3036]">
+
+        <div className="grid gap-px bg-[#2d3036] sm:grid-cols-3">
+          {[
+            ['Ativas', visibleKeys.length],
+            ['Criadas', keys.data?.length ?? 0],
+            ['Último uso', visibleKeys.some(key => key.lastUsedAt) ? 'registrado' : 'sem uso'],
+          ].map(([label, value]) => (
+            <div key={label} className="bg-[#181a21] p-4">
+              <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</span>
+              <strong className="mt-1 block text-xl text-white">{value}</strong>
+            </div>
+          ))}
+        </div>
+
+        <div className="hidden overflow-x-auto lg:block">
+          <table className="w-full min-w-[820px] border-collapse text-left text-sm">
+            <thead className="bg-[#20232b] text-xs uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-4 py-3 font-semibold">Nome</th>
+                <th className="px-4 py-3 font-semibold">Token</th>
+                <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold">Criada</th>
+                <th className="px-4 py-3 font-semibold">Último uso</th>
+                <th className="px-4 py-3 font-semibold">Ações</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-[#2d3036]">
+              {visibleKeys.map(key => (
+                <tr key={key.id} className="transition hover:bg-[#1c1f26]">
+                  <td className="px-4 py-4 font-semibold text-white">{key.name}</td>
+                  <td className="px-4 py-4">
+                    <button
+                      type="button"
+                      className="inline-flex max-w-[220px] items-center gap-2 rounded-md border border-[#2d3036] bg-[#111318] px-2 py-1 font-mono text-xs text-gray-400 transition hover:text-white"
+                      onClick={() => void navigator.clipboard?.writeText(`${key.prefix}...${key.lastFour}`)}
+                    >
+                      <span>{key.prefix}...{key.lastFour}</span>
+                      <Copy size={13} />
+                    </button>
+                  </td>
+                  <td className="px-4 py-4">
+                    <span className="rounded-full bg-[#2edb5c]/15 px-2.5 py-1 text-xs font-semibold text-[#8ff0a8]">Ativa</span>
+                  </td>
+                  <td className="px-4 py-4 text-gray-400">{key.createdAt ? new Date(key.createdAt).toLocaleDateString('pt-BR') : '-'}</td>
+                  <td className="px-4 py-4 text-gray-400">{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleDateString('pt-BR') : 'Nunca'}</td>
+                  <td className="px-4 py-4">
+                    <div ref={openMenuKeyId === key.id ? keyMenuRef : undefined} className="relative flex justify-end">
+                      <button
+                        type="button"
+                        className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md border border-[#2d3036] bg-[#111318] text-gray-400 transition hover:bg-[#23262e] hover:text-white"
+                        onClick={() => setOpenMenuKeyId(current => (current === key.id ? null : key.id))}
+                        aria-label={`Ações para ${key.name}`}
+                      >
+                        <MoreVertical size={17} />
+                      </button>
+                      {openMenuKeyId === key.id && (
+                        <div className="absolute right-0 top-10 z-50 w-44 overflow-hidden rounded-md border border-[#2d3036] bg-[#111318] shadow-xl">
+                          <button
+                            type="button"
+                            className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm text-gray-200 transition hover:bg-[#23262e] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                            disabled={rotate.isPending}
+                            onClick={() => rotate.mutate(key.id)}
+                          >
+                            <RefreshCw size={15} />
+                            Renovar chave
+                          </button>
+                          <button
+                            type="button"
+                            className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-sm text-red-300 transition hover:bg-red-500/10 hover:text-red-200"
+                            onClick={() => {
+                              setOpenMenuKeyId(null);
+                              setDeleteKeyId(key.id);
+                            }}
+                          >
+                            <Trash2 size={15} />
+                            Remover chave
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {visibleKeys.length === 0 && (
+            <div className="p-8 text-center text-sm text-gray-500">
+              Nenhuma chave criada ainda.
+            </div>
+          )}
+        </div>
+
+        <div className="divide-y divide-[#2d3036] lg:hidden">
           {visibleKeys.map(key => (
             <div key={key.id} className="grid gap-3 p-4 sm:grid-cols-[minmax(0,1fr)_auto_auto] sm:items-center">
               <div className="min-w-0">
@@ -3848,13 +4570,14 @@ function DashboardMetricCard({
   title: string;
   value: string | number;
   description: string;
-  tone?: 'green' | 'blue' | 'red' | 'teal';
+  tone?: 'green' | 'blue' | 'red' | 'teal' | 'amber';
 }) {
   const tones = {
     green: 'bg-[#12351f] text-[#2edb5c]',
     blue: 'bg-blue-500/15 text-blue-300',
     red: 'bg-red-500/15 text-red-300',
     teal: 'bg-cyan-500/15 text-cyan-300',
+    amber: 'bg-amber-500/15 text-amber-200',
   };
 
   return (
@@ -6101,8 +6824,16 @@ ${headers}`;
                     <span className="text-gray-400">API Key ausente, inválida ou revogada.</span>
                   </div>
                   <div className="grid gap-2 p-4 sm:grid-cols-[90px_minmax(0,1fr)]">
+                    <span className="font-mono font-semibold text-amber-300">402</span>
+                    <span className="text-gray-400">Assinatura expirada, pausada ou sem pagamento confirmado para uso operacional.</span>
+                  </div>
+                  <div className="grid gap-2 p-4 sm:grid-cols-[90px_minmax(0,1fr)]">
                     <span className="font-mono font-semibold text-red-300">404</span>
                     <span className="text-gray-400">Instância, chat ou recurso não encontrado para a organização da API Key.</span>
+                  </div>
+                  <div className="grid gap-2 p-4 sm:grid-cols-[90px_minmax(0,1fr)]">
+                    <span className="font-mono font-semibold text-blue-300">429</span>
+                    <span className="text-gray-400">Fila ou limite operacional temporariamente cheio. Reenvie com backoff.</span>
                   </div>
                   <div className="grid gap-2 p-4 sm:grid-cols-[90px_minmax(0,1fr)]">
                     <span className="font-mono font-semibold text-red-300">413</span>
@@ -6163,6 +6894,290 @@ ${headers}`;
   );
 }
 
+function BillingCheckoutView({
+  purchaseId,
+  checkoutSlots = 1,
+  organizationId,
+  navigate,
+}: {
+  purchaseId?: string;
+  checkoutSlots?: number;
+  organizationId?: string;
+  navigate: (path: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const isNewCheckout = purchaseId === 'new';
+  const purchase = useQuery({
+    queryKey: ['billing-purchase', purchaseId],
+    queryFn: () => apiClient.billingPurchase(purchaseId!),
+    enabled: Boolean(purchaseId && !isNewCheckout),
+    refetchInterval: query => (query.state.data?.status === 'PENDING' ? 5000 : false),
+  });
+  const billing = useQuery({
+    queryKey: ['billing-subscription', organizationId],
+    queryFn: () => apiClient.billingSubscription(organizationId),
+    enabled: Boolean(organizationId),
+    refetchInterval: 10000,
+  });
+  const createCheckout = useMutation({
+    mutationFn: () => {
+      if (!organizationId) throw new Error('Organização não encontrada.');
+      if (billing.data?.subscription) return apiClient.createInstanceSlotsCheckout(organizationId, checkoutSlots);
+      return apiClient.createBillingCheckout(organizationId, checkoutSlots);
+    },
+    onSuccess: data => {
+      void queryClient.invalidateQueries({ queryKey: ['billing-subscription'] });
+      void queryClient.invalidateQueries({ queryKey: ['billing-purchases'] });
+      const nextPurchaseId = data.pendingPurchase?.id;
+      if (nextPurchaseId) {
+        navigate(billingCheckoutRoutePath(nextPurchaseId));
+        return;
+      }
+      void billing.refetch();
+    },
+  });
+  const data = purchase.data;
+  const addedSlots = data ? Math.max(data.requestedMaxInstances - data.currentMaxInstances, 0) : 0;
+  const statusLabel: Record<BillingPurchase['status'], string> = {
+    PENDING: 'Aguardando pagamento',
+    PAID: 'Pago',
+    EXPIRED: 'Expirado',
+    CANCELED: 'Cancelado',
+    FAILED: 'Falhou',
+  };
+
+  useEffect(() => {
+    if (data?.status !== 'PAID') return;
+    void queryClient.invalidateQueries({ queryKey: ['billing-subscription'] });
+    void queryClient.invalidateQueries({ queryKey: ['instances'] });
+  }, [data?.status, queryClient]);
+
+  if (isNewCheckout) {
+    const subscription = billing.data?.subscription ?? null;
+    const currentMaxInstances = subscription?.maxInstances ?? 0;
+    const requestedMaxInstances = currentMaxInstances + checkoutSlots;
+    const currentAmount = subscription?.monthlyAmountCents ?? 0;
+    const nextAmount = calculateBillingAmount(Math.max(requestedMaxInstances, 1), subscription?.plan);
+    const amountDiff = Math.max(nextAmount - currentAmount, nextAmount);
+    const checkoutCreatedWithoutPendingPurchase = createCheckout.isSuccess && !createCheckout.data?.pendingPurchase;
+
+    return (
+      <div className="space-y-5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div className="min-w-0">
+            <h2 className="text-xl font-semibold">Checkout de slots</h2>
+            <p className="mt-1 text-sm text-gray-400">
+              Revise a compra e conclua o pagamento sem sair do RavoxZap.
+            </p>
+          </div>
+          <Button type="button" variant="ghost" onClick={() => navigate('/dashboard/instances')}>
+            <ArrowLeft size={16} />
+            Voltar
+          </Button>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <DashboardMetricCard icon={CreditCard} title="Compra" value={`+${checkoutSlots}`} description="slots adicionais" tone="amber" />
+          <DashboardMetricCard icon={Smartphone} title="Atual" value={currentMaxInstances} description="slots contratados agora" tone="blue" />
+          <DashboardMetricCard icon={CheckCircle2} title="Novo limite" value={requestedMaxInstances} description="após confirmação" />
+          <DashboardMetricCard icon={Clock3} title="Mensalidade" value={formatCurrency(nextAmount)} description={`+${formatCurrency(amountDiff)}/mês`} tone="teal" />
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+          <section className="rounded-xl border border-[#2d3036] bg-[#181a21] p-5">
+            <div className="flex items-center gap-3">
+              <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-[#2edb5c]/15 text-[#2edb5c]">
+                <CreditCard size={20} />
+              </span>
+              <div>
+                <h3 className="font-semibold text-white">Pagamento</h3>
+                <p className="text-sm text-gray-400">O checkout seguro abre aqui no painel após confirmar o pedido.</p>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <label className="rounded-lg border border-[#2d3036] bg-[#111318] p-4">
+                <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Método</span>
+                <strong className="mt-1 block text-white">Cartão ou Pix</strong>
+                <span className="mt-1 block text-sm text-gray-400">Disponível no checkout seguro.</span>
+              </label>
+              <label className="rounded-lg border border-[#2d3036] bg-[#111318] p-4">
+                <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Liberação</span>
+                <strong className="mt-1 block text-white">Automática</strong>
+                <span className="mt-1 block text-sm text-gray-400">Após confirmação do pagamento.</span>
+              </label>
+            </div>
+
+            {createCheckout.error && (
+              <p className="mt-4 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-200">
+                {createCheckout.error instanceof Error ? createCheckout.error.message : 'Não foi possível criar o checkout.'}
+              </p>
+            )}
+
+            {checkoutCreatedWithoutPendingPurchase && (
+              <div className="mt-4 rounded-lg border border-[#2edb5c]/25 bg-[#12351f] p-4 text-sm text-[#8ff0a8]">
+                Pagamento confirmado em ambiente local. Os slots foram liberados para teste.
+              </div>
+            )}
+
+            <Button
+              type="button"
+              className="mt-5 w-full"
+              disabled={!organizationId || createCheckout.isPending}
+              onClick={() => createCheckout.mutate()}
+            >
+              <CreditCard size={16} />
+              {createCheckout.isPending ? 'Preparando checkout...' : 'Confirmar e pagar'}
+            </Button>
+          </section>
+
+          <aside className="rounded-xl border border-[#2d3036] bg-[#181a21] p-5">
+            <h3 className="font-semibold text-white">Resumo</h3>
+            <div className="mt-4 space-y-3 text-sm">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-gray-400">Slots atuais</span>
+                <strong>{currentMaxInstances}</strong>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-gray-400">Compra</span>
+                <strong>+{checkoutSlots}</strong>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-gray-400">Novo limite</span>
+                <strong>{requestedMaxInstances}</strong>
+              </div>
+              <div className="border-t border-[#2d3036] pt-3">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="text-gray-400">Mensalidade</span>
+                  <strong>{formatCurrency(nextAmount)}</strong>
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-4">
+                  <span className="text-gray-400">Diferença estimada</span>
+                  <strong className="text-[#8ff0a8]">+{formatCurrency(amountDiff)}/mês</strong>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    );
+  }
+
+  if (!purchaseId) {
+    return (
+      <section className="rounded-lg border border-[#2d3036] bg-[#181a21] p-8 text-center text-gray-400">
+        <CreditCard className="mx-auto mb-3" />
+        <h2 className="text-lg font-semibold text-white">Checkout não encontrado.</h2>
+        <p className="mt-1 text-sm">Volte para instâncias e escolha os slots que deseja contratar.</p>
+        <Button className="mt-4" onClick={() => navigate('/dashboard/instances')}>Voltar para instâncias</Button>
+      </section>
+    );
+  }
+
+  if (purchase.isLoading) {
+    return <EmptyState icon={CreditCard} title="Carregando checkout..." />;
+  }
+
+  if (!data) {
+    return (
+      <section className="rounded-lg border border-[#2d3036] bg-[#181a21] p-8 text-center text-gray-400">
+        <CreditCard className="mx-auto mb-3" />
+        <h2 className="text-lg font-semibold text-white">Pedido não encontrado.</h2>
+        <p className="mt-1 text-sm">Não foi possível localizar esta compra de slots.</p>
+        <Button className="mt-4" onClick={() => navigate('/dashboard/instances')}>Voltar para instâncias</Button>
+      </section>
+    );
+  }
+
+  const isPaid = data.status === 'PAID';
+  const isPending = data.status === 'PENDING';
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="text-xl font-semibold">Checkout de slots</h2>
+            <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+              isPaid ? 'bg-[#2edb5c]/15 text-[#8ff0a8]' : 'bg-amber-500/15 text-amber-200'
+            }`}>
+              {statusLabel[data.status]}
+            </span>
+          </div>
+          <p className="mt-1 text-sm text-gray-400">
+            Complete o pagamento sem sair do painel. Assim que for confirmado, os slots entram na sua conta.
+          </p>
+        </div>
+        <Button type="button" variant="ghost" onClick={() => navigate('/dashboard/instances')}>
+          <ArrowLeft size={16} />
+          Voltar
+        </Button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <DashboardMetricCard icon={CreditCard} title="Pedido" value={`+${addedSlots}`} description="slots adicionados" tone="amber" />
+        <DashboardMetricCard icon={Smartphone} title="Atual" value={data.currentMaxInstances} description="slots contratados agora" tone="blue" />
+        <DashboardMetricCard icon={CheckCircle2} title="Novo limite" value={data.requestedMaxInstances} description="após confirmação" />
+        <DashboardMetricCard icon={Clock3} title="Mensalidade" value={formatCurrency(data.amountCents)} description="após confirmação" tone="teal" />
+      </div>
+
+      {isPaid && (
+        <section className="rounded-xl border border-[#2edb5c]/25 bg-[#12351f] p-5">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="font-semibold text-white">Pagamento confirmado</h3>
+              <p className="mt-1 text-sm text-[#8ff0a8]">
+                Seus slots ja foram liberados. Voce pode criar ou conectar novas instancias.
+              </p>
+            </div>
+            <Button type="button" onClick={() => navigate('/dashboard/instances')}>
+              <Plus size={16} />
+              Criar instância
+            </Button>
+          </div>
+        </section>
+      )}
+
+      {isPending && data.checkoutUrl && (
+        <section className="overflow-hidden rounded-xl border border-[#2d3036] bg-[#181a21]">
+          <div className="flex flex-col gap-2 border-b border-[#2d3036] p-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="font-semibold text-white">Pagamento seguro</h3>
+              <p className="text-sm text-gray-400">A etapa de pagamento carrega aqui dentro do RavoxZap.</p>
+            </div>
+            <Button type="button" variant="ghost" onClick={() => void purchase.refetch()}>
+              <RefreshCw size={16} />
+              Atualizar status
+            </Button>
+          </div>
+          <iframe
+            title="Checkout de pagamento"
+            src={data.checkoutUrl}
+            className="h-[720px] w-full border-0 bg-white"
+            allow="payment *; clipboard-write"
+          />
+        </section>
+      )}
+
+      {!isPending && !isPaid && (
+        <section className="rounded-xl border border-[#2d3036] bg-[#181a21] p-5">
+          <h3 className="font-semibold text-white">Este checkout não está mais disponível</h3>
+          <p className="mt-1 text-sm text-gray-400">Crie uma nova compra de slots para continuar.</p>
+          <Button type="button" className="mt-4" onClick={() => navigate('/dashboard/instances')}>
+            Comprar slots
+          </Button>
+        </section>
+      )}
+
+      {billing.data?.pendingPurchase?.id === data.id && (
+        <p className="text-xs text-gray-500">
+          Pedido {data.id}. O painel verifica automaticamente a confirmação a cada poucos segundos.
+        </p>
+      )}
+    </div>
+  );
+}
+
 function DashboardBreadcrumbs({
   route,
   selectedInstance,
@@ -6179,6 +7194,7 @@ function DashboardBreadcrumbs({
     instances: 'Instâncias',
     'api-keys': 'API Keys',
     docs: 'Docs',
+    'billing-checkout': 'Checkout',
   };
   const crumbs: Array<{ label: string; path?: string }> = [{ label: viewLabels[route.view], path: viewPaths[route.view] }];
 
@@ -6305,6 +7321,13 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
 
   const organizations = account.data?.organizations ?? [];
   const organizationName = organizations[0]?.name ?? 'Carregando organização';
+  const organizationId = organizations[0]?.id;
+  const billing = useQuery({
+    queryKey: ['billing-subscription', organizationId],
+    queryFn: () => apiClient.billingSubscription(organizationId),
+    enabled: Boolean(organizationId),
+    refetchInterval: 30000,
+  });
 
   return (
     <div className="min-h-screen bg-[#111318] md:flex">
@@ -6356,6 +7379,15 @@ function Dashboard({ onLogout }: { onLogout: () => void }) {
               routeInstanceId={route.instanceId}
               routeInstanceTab={route.instanceTab}
               navigate={navigate}
+              billing={billing.data}
+            />
+          )}
+          {view === 'billing-checkout' && (
+            <BillingCheckoutView
+              purchaseId={route.purchaseId}
+              checkoutSlots={route.checkoutSlots}
+              organizationId={organizationId}
+              navigate={navigate}
             />
           )}
           {view === 'api-keys' && <ApiKeysView organizations={organizations} />}
@@ -6387,6 +7419,9 @@ function App() {
   }
 
   if (pathname === '/docs' || pathname.startsWith('/docs/')) return <PublicDocsPage />;
+  if (pathname === '/login' || pathname === '/register') {
+    return authenticated ? <Dashboard onLogout={logout} /> : <AuthScreen onAuth={() => setAuthenticated(true)} />;
+  }
 
   return authenticated ? <Dashboard onLogout={logout} /> : <AuthScreen onAuth={() => setAuthenticated(true)} />;
 }

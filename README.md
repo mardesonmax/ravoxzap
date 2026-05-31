@@ -15,6 +15,7 @@ Gateway/API multiusuário de WhatsApp via QR Code, com Dashboard administrativo,
 
 | Serviço | URL |
 | --- | --- |
+| Landing page | `http://localhost:3003` |
 | Dashboard | `http://localhost:3004` |
 | RavoxChat | `http://localhost:3005` |
 | Docs públicas | `http://localhost:3004/docs` |
@@ -70,11 +71,12 @@ yarn dev
 O comando `yarn dev` sobe:
 
 - `apps/api` em `http://localhost:3334`
+- `apps/landing` em `http://localhost:3003`
 - `apps/dashboard` em `http://localhost:3004`
 - `apps/ravoxchat` em `http://localhost:3005`
 - `apps/worker` processando WhatsApp, filas e webhooks
 
-Se quiser subir apenas o RavoxChat em outro terminal, use `yarn dev:chat`.
+Se quiser subir apenas a landing ou o RavoxChat em outro terminal, use `yarn dev:landing` ou `yarn dev:chat`.
 
 ## Docker local
 
@@ -327,6 +329,7 @@ http://localhost:3004/docs
 
 ```bash
 yarn dev
+yarn dev:landing
 yarn dev:dashboard
 yarn dev:chat
 yarn dev:api

@@ -14,6 +14,7 @@ import { createLogger } from '@ravoxzap/logger';
 import { closeQueues, createQueues } from '@ravoxzap/queue';
 
 import { AppError } from './errors/app-error.js';
+import { registerBillingRoutes } from './modules/billing/routes.js';
 import { registerRoutes } from './routes/index.js';
 
 const logger = createLogger({ service: 'api' });
@@ -78,6 +79,7 @@ app.get('/health', async () => ({
   time: new Date().toISOString(),
 }));
 
+registerBillingRoutes(app, env);
 registerRoutes(app, queues, env);
 
 app.setErrorHandler((error, _request, reply) => {

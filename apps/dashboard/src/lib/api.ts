@@ -18,6 +18,56 @@ export type Organization = {
   slug: string;
 };
 
+export type BillingPlan = {
+  code: string;
+  name: string;
+  baseMonthlyCents: number;
+  includedInstances: number;
+  additionalMonthlyCents: number;
+  volumeAdditionalMonthlyCents: number;
+  volumeThreshold: number;
+  trialDays: number;
+};
+
+export type BillingSubscriptionStatus = 'TRIALING' | 'ACTIVE' | 'PAST_DUE' | 'PAUSED' | 'CANCELED';
+
+export type BillingSubscription = {
+  id: string;
+  organizationId: string;
+  provider: 'MERCADO_PAGO';
+  status: BillingSubscriptionStatus;
+  maxInstances: number;
+  monthlyAmountCents: number;
+  trialEndsAt: string | null;
+  currentPeriodEnd: string | null;
+  checkoutUrl: string | null;
+  plan: BillingPlan;
+};
+
+export type BillingPurchase = {
+  id: string;
+  organizationId: string;
+  subscriptionId: string | null;
+  type: 'INITIAL_SUBSCRIPTION' | 'INSTANCE_SLOT_UPGRADE';
+  status: 'PENDING' | 'PAID' | 'EXPIRED' | 'CANCELED' | 'FAILED';
+  provider: 'MERCADO_PAGO';
+  currentMaxInstances: number;
+  requestedMaxInstances: number;
+  amountCents: number;
+  checkoutUrl: string | null;
+  confirmedAt: string | null;
+  expiresAt: string | null;
+  createdAt: string;
+};
+
+export type BillingSubscriptionResponse = {
+  subscription: BillingSubscription | null;
+  activeInstances: number;
+  canCreateInstance: boolean;
+  blockReason: string | null;
+  pendingPurchase: BillingPurchase | null;
+};
+
 export type WhatsAppInstance = {
   id: string;
   organizationId: string;
@@ -37,6 +87,9 @@ export type ApiKey = {
   lastFour: string;
   status: string;
   token?: string;
+  createdAt?: string;
+  lastUsedAt?: string | null;
+  revokedAt?: string | null;
 };
 
 export type WebhookEndpoint = {
@@ -233,6 +286,31 @@ export const apiClient = {
   account: () => api<{ id: string; name: string; email: string; organizations: Organization[] }>('/account'),
   dashboardSummary: () => api<DashboardSummary>('/dashboard/summary'),
   organizations: () => api<Organization[]>('/organizations'),
+  billingPlans: () => api<{ plans: BillingPlan[]; recommendedPlanCode: string }>('/billing/plans'),
+  billingSubscription: (organizationId?: string) =>
+    api<BillingSubscriptionResponse>(
+      organizationId ? `/billing/subscription?organizationId=${encodeURIComponent(organizationId)}` : '/billing/subscription',
+    ),
+  createBillingCheckout: (organizationId: string, maxInstances: number) =>
+    api<BillingSubscriptionResponse>('/billing/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ organizationId, maxInstances }),
+    }),
+  createInstanceSlotsCheckout: (organizationId: string, additionalInstances: number) =>
+    api<BillingSubscriptionResponse>('/billing/instance-slots/checkout', {
+      method: 'POST',
+      body: JSON.stringify({ organizationId, additionalInstances }),
+    }),
+  changeBillingInstanceLimit: (organizationId: string, maxInstances: number) =>
+    api<BillingSubscriptionResponse>('/billing/change-instance-limit', {
+      method: 'POST',
+      body: JSON.stringify({ organizationId, maxInstances }),
+    }),
+  billingPurchases: (organizationId?: string) =>
+    api<{ purchases: BillingPurchase[] }>(
+      organizationId ? `/billing/purchases?organizationId=${encodeURIComponent(organizationId)}` : '/billing/purchases',
+    ),
+  billingPurchase: (id: string) => api<BillingPurchase>(`/billing/purchases/${encodeURIComponent(id)}`),
   instances: () => api<WhatsAppInstance[]>('/instances'),
   createInstance: (organizationId: string, name: string) =>
     api<WhatsAppInstance>('/instances', {
